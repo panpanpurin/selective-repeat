@@ -1,4 +1,4 @@
-import Network
+import network
 import time
 import hashlib
 
@@ -201,7 +201,7 @@ class RDT:
     connection_timeout = 5
     
     def __init__(self, role_str, server_str, port):
-        self.network = Network.NetworkLayer(role_str, server_str, port)
+        self.network = network.NetworkLayer(role_str, server_str, port)
 
         # bytes read from the network that don't form a complete packet yet,
         # kept between reads because TCP may split a packet across them

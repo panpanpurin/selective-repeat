@@ -1,6 +1,6 @@
 import argparse
-import RDT
-from Metrics import Metrics
+from rdt import RDT, Transport
+from metrics import Metrics
 import time
 
 def upperCase(message):
@@ -13,8 +13,8 @@ if __name__ == '__main__':
     parser.add_argument('port', help='Port.', type=int)
     args = parser.parse_args()
 
-    rdt = RDT.RDT('server', None, args.port)
-    transport = RDT.Transport()
+    rdt = RDT('server', None, args.port)
+    transport = Transport()
 
     last_received_time = time.time()
     timeout_limit = 30

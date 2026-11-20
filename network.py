@@ -3,7 +3,7 @@ import socket
 import threading
 from time import sleep
 import random
-import RDT
+import rdt
 
 
 ## Provides an abstraction for the network layer
@@ -60,7 +60,7 @@ class NetworkLayer:
         # corrupt a packet 
         # (insert from 1 to 5 characters 'X' into some random consecutive positions)
         if random.random() < self.prob_byte_corr:
-            start = random.randint(RDT.Packet.size_len, len(msg_S) - 5)
+            start = random.randint(rdt.Packet.size_len, len(msg_S) - 5)
             num = random.randint(1, 5)
             repl_S = ''.join(random.sample('XXXXX', num))  # sample length >= num
             msg_S = msg_S[:start] + repl_S + msg_S[start + num:]

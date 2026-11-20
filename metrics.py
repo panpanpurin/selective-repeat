@@ -1,7 +1,6 @@
 import time
 import matplotlib.pyplot as plt
-import numpy as np
-from RDT import Packet
+from rdt import Packet
 
 def format_time(val):
     f_time = time.strftime("%d-%m-%Y %H:%M:%S", time.gmtime(val/1000000000 - 3*60*60))

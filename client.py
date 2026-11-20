@@ -1,14 +1,15 @@
 import argparse
-import RDT
-from Metrics import Metrics
+from rdt import RDT, Transport
+from metrics import Metrics
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Quotation client talking to a Pig Latin server.')
+    parser = argparse.ArgumentParser(description='Quotation client talking to an UPPER CASE server.')
     parser.add_argument('server', help='Server.')
     parser.add_argument('port', help='Port.', type=int)
+    parser.add_argument('-n', '--messages', help='Number of messages to send (default: 5).', type=int, default=5)
     args = parser.parse_args()
 
-    document = [
+    quotes = [
         'The art of debugging is figuring out what you really told your program to do rather than what you thought you told it to do. -- Andrew Singer', 
     	'The good news about computers is that they do what you tell them to do. The bad news is that they do what you tell them to do. -- Ted Nelson', 
     	'It is hardware that makes a machine fast. It is software that makes a fast machine slow. -- Craig Bruce',
@@ -16,8 +17,11 @@ if __name__ == '__main__':
         'The computer was born to solve problems that did not exist before. - Bill Gates'
     ]
 
-    rdt = RDT.RDT('client', args.server, args.port)
-    transport = RDT.Transport()
+    # repeat the quotes if more messages than quotes are requested
+    document = [quotes[i % len(quotes)] for i in range(args.messages)]
+
+    rdt = RDT('client', args.server, args.port)
+    transport = Transport()
 
     try:
 

@@ -1,12 +1,6 @@
 # Selective Repeat 
 Implementation of the rdt4.0 protocol. The primary enhancement is the incorporation of the selective repeat mechanism, allowing for the seamless flow of multiple packets between a client and a server.
 
-## Members
-
-200028880 - Wallace Ben Teng Lin Wu
-200067257 - Matheus Santos Alencar
-190024771 - Andressa Araújo
-
 ## Project Details
 
 ### Objective
@@ -37,12 +31,20 @@ Upon execution/simulation, the code provides the following statistics:
 
 ## Code Usage
 
-The code is designed to allow the transmission of multiple messages between the client and server. The number of messages can be configured as a command-line argument for the client.
+The code is designed to allow the transmission of multiple messages between the client and server. The number of messages can be configured as a command-line argument for the client (`-n`, default 5).
+
+Install the dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+Start the server, then the client in another terminal:
 
 ```bash
 python server.py 5000
 ```
 ```bash
-python client.py localhost 5000
+python client.py localhost 5000 -n 5
 ```
 ---
