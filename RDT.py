@@ -202,9 +202,49 @@ class RDT:
     
     def __init__(self, role_str, server_str, port):
         self.network = Network.NetworkLayer(role_str, server_str, port)
-    
+
+        # bytes read from the network that don't form a complete packet yet,
+        # kept between reads because TCP may split a packet across them
+        self.rx_buffer = ""
+
     def disconnect(self):
         self.network.disconnect()
+
+    # read from the network and extract every complete packet in the buffer
+    # returns (whether anything was read, list of raw packets)
+    def read_packets(self, metrics):
+        received = self.network.udt_receive()
+        if received:
+            self.rx_buffer += received
+
+        min_len = Packet.size_len + Packet.seq_num_len + 1 + Packet.checksum_len
+
+        packets = []
+        while len(self.rx_buffer) >= Packet.size_len:
+
+            # length attribute may be corrupted
+            try:
+                length = int(self.rx_buffer[0:Packet.size_len])
+            except ValueError:
+                length = -1
+
+            # invalid length: packet boundaries are lost, drop the buffer to resync
+            if length < min_len:
+                debug_log(f"Received: CORRUPTED length, dropping buffer, at {format_time(time.time_ns())}" + f"\n\t {self.rx_buffer}\n")
+                # add corrupted received
+                metrics.add_corrupted_received()
+                self.rx_buffer = ""
+                break
+
+            # incomplete packet: wait for the rest of it on the next read
+            if len(self.rx_buffer) < length:
+                break
+
+            # extract first packet, leave the rest at the buffer
+            packets.append(self.rx_buffer[0:length])
+            self.rx_buffer = self.rx_buffer[length:]
+
+        return bool(received), packets
 
     def rdt_4_0_send(self, msgs, metrics):
 
@@ -279,51 +319,29 @@ class RDT:
             # start_timer = time.time()
             # try to read an packet from network for {self.timeout}/2 seconds
             # while (received == None and (time.time() < (start_timer + self.timeout/2))):
-            received = self.network.udt_receive()
+            _, packets = self.read_packets(metrics)
 
-            if (received):
-                
-                # buffer content read from network, it can contain more than 1 packet
-                buffer = received
-                
-                while (len(buffer) >= Packet.size_len):
+            for received in packets:
 
-                    # length attribute may be corrupted
-                    try:
-                        length = int(buffer[0:Packet.size_len])
-                    except:
-                        debug_log(f"Received: CORRUPTED packet, at {format_time(time.time_ns())}" + f"\n\t {received}\n")
-                        # add corrupted received
-                        metrics.add_corrupted_received()
-                        continue
+                p = Packet()
+                if (not p.corrupt(received)):
+                    p.decode(received)
+                    ack_num = p.get_ack()
+                    debug_log(f"Received ACK: Reading non corrupted ACK {ack_num}, at {format_time(time.time_ns())}" + f"\n\t {p.packet}\n")
+                    if (ack_num != -1 and ack_num in window):
+                        window[ack_num][0] = True
 
-                    if (len(buffer) >= length):
-
-                        # extract first packet, leave the rest at the buffer
-                        received = buffer[0:length]
-                        buffer = buffer[length:]
-
-                        p = Packet()
-                        if (not p.corrupt(received)):
-                            p.decode(received)
-                            ack_num = p.get_ack()
-                            debug_log(f"Received ACK: Reading non corrupted ACK {ack_num}, at {format_time(time.time_ns())}" + f"\n\t {p.packet}\n")
-                            if (ack_num != -1 and ack_num in window):
-                                window[ack_num][0] = True
-
-                                # slide window
-                                if (ack_num == base):
-                                    idx = base
-                                    while(idx in window and window[idx][0]):
-                                        window.pop(idx)
-                                        idx = (idx + 1) % self.modulo
-                                    base = idx
-                        else:
-                            debug_log(f"Received: CORRUPTED packet, at {format_time(time.time_ns())}" + f"\n\t {received}\n")
-                            # add corrupted received
-                            metrics.add_corrupted_received()
-                    else:
-                        break
+                        # slide window
+                        if (ack_num == base):
+                            idx = base
+                            while(idx in window and window[idx][0]):
+                                window.pop(idx)
+                                idx = (idx + 1) % self.modulo
+                            base = idx
+                else:
+                    debug_log(f"Received: CORRUPTED packet, at {format_time(time.time_ns())}" + f"\n\t {received}\n")
+                    # add corrupted received
+                    metrics.add_corrupted_received()
 
     def rdt_4_0_receive(self, metrics):
 
@@ -362,92 +380,73 @@ class RDT:
             # start_timer = time.time()
             # try to read an packet from network for {self.timeout}/2 seconds
             # while (received == None and (time.time() < (start_timer + self.timeout/2))):
-            received = self.network.udt_receive()
+            got_data, packets = self.read_packets(metrics)
 
-            if (received):
-                
-                # received a packet, update last time 
+            if (got_data):
+                # received data, update last time
                 last_timer = time.time()
 
-                # buffer content read from network, it can contain more than 1 packet
-                buffer = received
-                
-                while (len(buffer) >= Packet.size_len):
+            for received in packets:
 
-                    # length attribute may be corrupted
-                    try:
-                        length = int(buffer[0:Packet.size_len])
-                    except:
-                        debug_log(f"Received: CORRUPTED packet, at {format_time(time.time_ns())}" + f"\n\t {received}\n")
-                        # add corrupted received
-                        metrics.add_corrupted_received()
-                        continue
+                p = Packet()
+                if (not p.corrupt(received)):
+                    p.decode(received)
+                    num = p.seq_num
+                    debug_log(f"Received: Reading non corrupted packet {num}, at {format_time(time.time_ns())}" + f"\n\t {p.packet}\n")
 
-                    if (len(buffer) >= length):
+                    # already received packet, but sender might be behind
+                    # just send ack, don't buffer it
+                    if num in behind:
+                        a = Packet()
+                        a.code(num, "", 1)
+                        debug_log(f"Sending ACK: for packet {num}, at {format_time(time.time_ns())}" + f"\n\t {a.packet}\n")
+                        self.network.udt_send(a.packet)
+                        # if initialized, override end time for the last packet sent
+                        metrics.set_end()
+                        # if not initialized, set start time for the first packet sent
+                        metrics.set_start()
+                        # add packet sent (ack)
+                        metrics.add_packet_sent(a)
 
-                        # extract first packet, leave the rest at the buffer
-                        received = buffer[0:length]
-                        buffer = buffer[length:]
-                                
-                        p = Packet()
-                        if (not p.corrupt(received)):
-                            p.decode(received)
-                            num = p.seq_num
-                            debug_log(f"Received: Reading non corrupted packet {num}, at {format_time(time.time_ns())}" + f"\n\t {p.packet}\n")
+                    # packed inside window range
+                    # send ack and buffer it
+                    elif num in window_range:
+                        a = Packet()
+                        a.code(num, "", 1)
+                        debug_log(f"Sending ACK: for packet {num}, at {format_time(time.time_ns())}" + f"\n\t {a.packet}\n")
+                        self.network.udt_send(a.packet)
+                        # if initialized, override end time for the last packet sent
+                        metrics.set_end()
+                        # if not initialized, set start time for the first packet sent
+                        metrics.set_start()
+                        # add packet sent (ack)
+                        metrics.add_packet_sent(a)
 
-                            # already received packet, but sender might be behind
-                            # just send ack, don't buffer it
-                            if num in behind:
-                                a = Packet()
-                                a.code(num, "", 1)
-                                debug_log(f"Sending ACK: for packet {num}, at {format_time(time.time_ns())}" + f"\n\t {a.packet}\n")
-                                self.network.udt_send(a.packet)
-                                # if initialized, override end time for the last packet sent 
-                                metrics.set_end()
-                                # if not initialized, set start time for the first packet sent 
-                                metrics.set_start()
-                                # add packet sent (ack)
-                                metrics.add_packet_sent(a)
+                        # buffer packet
+                        window[num] = p
 
-                            # packed inside window range
-                            # send ack and buffer it
-                            elif num in window_range:
-                                a = Packet()
-                                a.code(num, "", 1)
-                                debug_log(f"Sending ACK: for packet {num}, at {format_time(time.time_ns())}" + f"\n\t {a.packet}\n")
-                                self.network.udt_send(a.packet)
-                                # if initialized, override end time for the last packet sent 
-                                metrics.set_end()
-                                # if not initialized, set start time for the first packet sent 
-                                metrics.set_start()
-                                # add packet sent (ack)
-                                metrics.add_packet_sent(a)
+                        # slide window
+                        if (num == base):
+                            idx = base
+                            while(idx in window):
 
-                                # buffer packet
-                                window[num] = p
+                                if (window[idx].msg != "FIN"):
+                                    msgs.append(window[idx].msg)
+                                window.pop(idx)
 
-                                # slide window
-                                if (num == base):
-                                    idx = base
-                                    while(idx in window):
+                                # update ranges
+                                behind.remove((idx-self.window_len+self.modulo) % self.modulo)
+                                behind.add(idx)
+                                window_range.remove(idx)
+                                window_range.add((idx+self.window_len) % self.modulo)
 
-                                        if (window[idx].msg != "FIN"):
-                                            msgs.append(window[idx].msg)
-                                        window.pop(idx)
+                                idx = (idx + 1) % self.modulo
 
-                                        # update ranges
-                                        behind.remove((idx-self.window_len+self.modulo) % self.modulo)
-                                        behind.add(idx)
-                                        window_range.remove(idx)
-                                        window_range.add((idx+self.window_len) % self.modulo)
+                            base = idx
 
-                                        idx = (idx + 1) % self.modulo
-
-                                    base = idx
-
-                        else:
-                            debug_log(f"Received: CORRUPTED packet, at {format_time(time.time_ns())}" + f"\n\t {received}\n")
-                            # add corrupted received
-                            metrics.add_corrupted_received()
+                else:
+                    debug_log(f"Received: CORRUPTED packet, at {format_time(time.time_ns())}" + f"\n\t {received}\n")
+                    # add corrupted received
+                    metrics.add_corrupted_received()
         return msgs
     
