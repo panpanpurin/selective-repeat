@@ -1,8 +1,0 @@
-plotar os graficos para 5 cenários:
-    com 10% de erro para cada parametro
-    sem erro
-    com erro de 10% simultaneamente 
-    
-full duplex
-
-explicar as metricas

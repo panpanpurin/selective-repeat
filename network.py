@@ -13,7 +13,6 @@ class NetworkLayer:
     prob_byte_corr = 0.1
     prob_pkt_reorder = 0.1
 
-    # class variables
     sock = None
     conn = None
     buffer_S = ''
@@ -57,12 +56,11 @@ class NetworkLayer:
         if random.random() < self.prob_pkt_loss:
             return
         
-        # corrupt a packet 
-        # (insert from 1 to 5 characters 'X' into some random consecutive positions)
+        # corrupt a packet: replace 1 to 5 consecutive characters with 'X'
         if random.random() < self.prob_byte_corr:
             start = random.randint(rdt.Packet.size_len, len(msg_S) - 5)
             num = random.randint(1, 5)
-            repl_S = ''.join(random.sample('XXXXX', num))  # sample length >= num
+            repl_S = ''.join(random.sample('XXXXX', num))
             msg_S = msg_S[:start] + repl_S + msg_S[start + num:]
             
         # reorder packets - either hold a packet back, 
@@ -85,7 +83,6 @@ class NetworkLayer:
 
     ## Receive data from the network and save in internal buffer
     def collect(self):
-        #         print (threading.currentThread().getName() + ': Starting')
         while (True):
             try:
                 recv_bytes = self.conn.recv(2048)
@@ -96,7 +93,6 @@ class NetworkLayer:
             except socket.timeout as err:
                 pass
             if self.stop:
-                #                 print (threading.currentThread().getName() + ': Ending')
                 return
 
     ## Deliver collected data to client

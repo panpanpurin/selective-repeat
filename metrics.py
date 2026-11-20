@@ -5,36 +5,36 @@ from rdt import Packet
 def format_time(val):
     f_time = time.strftime("%d-%m-%Y %H:%M:%S", time.gmtime(val/1000000000 - 3*60*60))
     us = (val//1000) % 1000000
-    f_time += f".{us:3d} us" #microsseconds
+    f_time += f".{us:3d} us"
     return f_time
 
 class Metrics:
     def __init__(self, label=""):
-        self.label = label # se é Client ou Servidor, "Sender / Receiver"
+        self.label = label
 
         self.start_time = None
         self.end_time = None
 
-        # List of timestamps for all packet sent (timestamp, packet)
+        # (timestamp, packet) for every packet sent
         self.packets_sent = []
 
-        # List of timestamps for all packet sent for the first time (timestamp, packet)
+        # (timestamp, packet) for packets sent for the first time
         self.packets_first_sent = []
 
-        # List of timestamps for all packet resent (timestamp, packet)
+        # (timestamp, packet) for retransmissions
         self.retransmissions_sent = []
 
-        # List of timestamps for all received corrupted packets (timestamp)
+        # timestamps of corrupted packets received
         self.corrupted_received = []
 
 
+    # only the first call counts
     def set_start(self):
-        # set at first call
         if (self.start_time == None):
             self.start_time = time.time_ns()
 
+    # every call overrides the previous one
     def set_end(self):
-        # override after several calls
         self.end_time = time.time_ns()
 
     def add_packet_sent(self, p):

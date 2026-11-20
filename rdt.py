@@ -2,8 +2,7 @@ import network
 import time
 import hashlib
 
-debug = True    
-# default = False
+debug = True
 
 
 def debug_log(message):
@@ -13,22 +12,17 @@ def debug_log(message):
 def format_time(val):
     f_time = time.strftime("%d-%m-%Y %H:%M:%S", time.gmtime(val/1000000000 - 3*60*60))
     us = (val//1000) % 1000000
-    f_time += f".{us:3d} us" #microsseconds
+    f_time += f".{us:3d} us"
     return f_time
 
 class Packet:
     # packet = [size, seq_num, ackFlag, checksum, data]
 
-    # the number of bytes(chars) used to store the size of the packet
+    # field lengths in chars
     size_len = 8
-
-    # the number of bytes(chars) used to store sequence number
     seq_num_len = 8
-    
-    # the number of bytes(chars) of md5 checksum in hex
-    checksum_len = 32
+    checksum_len = 32  # md5 in hex
 
-    # Object Variables
     size = None
     size_str = None
     seq_num = None
@@ -39,47 +33,38 @@ class Packet:
     msg = None
     packet = None
 
-    # Receive packet format settings at initialization
     def __init__(self, size_len=8, seq_num_len=8, checksum_len=32):
         self.size_len = size_len
         self.seq_num_len = seq_num_len
         self.checksum_len = checksum_len
 
-    # create packet from augments
     def code(self, seq_num, msg, is_ack=0):
 
-        # create size (int and str)
         self.size = self.size_len + self.seq_num_len + self.checksum_len + 1 + len(msg)
         self.size_str = str(self.size).zfill(self.size_len)
 
-        # create seq_num (int and str)
         self.seq_num = seq_num
         self.seq_num_str = str(seq_num).zfill(self.seq_num_len)
 
-        # save ack (0 or 1 bool)
         self.ack = is_ack
         self.ack_str = str(self.ack)
 
-        # compute the checksum (str)
         self.checksum = hashlib.md5((self.size_str + self.seq_num_str + self.ack_str + msg).encode('utf-8')).hexdigest()
 
-        # save message (str)
         self.msg = msg
 
-        # compile into a string
         self.packet = self.size_str + self.seq_num_str + self.ack_str + self.checksum + self.msg
 
         return self.packet
-    
+
 
     def split(self, packet):
 
-        # split packet into respective variables
-        limits = [self.size_len, 
-                  self.size_len + self.seq_num_len, 
-                  self.size_len + self.seq_num_len + 1, 
+        limits = [self.size_len,
+                  self.size_len + self.seq_num_len,
+                  self.size_len + self.seq_num_len + 1,
                   self.size_len + self.seq_num_len + 1 + self.checksum_len]
-        
+
         size_str = packet[0 : limits[0]]
         seq_num_str = packet[limits[0] : limits[1]]
         ack_str = packet[limits[1] : limits[2]]
@@ -91,13 +76,10 @@ class Packet:
 
     def corrupt(self, packet):
 
-        # extract the fields
         size_str, seq_num_str, ack_str, checksum, msg = self.split(packet)
- 
-        # compute the checksum locally
+
         computed = hashlib.md5(str(size_str + seq_num_str + ack_str + msg).encode('utf-8')).hexdigest()
 
-        # and check if they are the same
         return checksum != computed
 
 
@@ -106,10 +88,8 @@ class Packet:
         if self.corrupt(packet):
             raise RuntimeError('Cannot extract packet: it is corrupted')
 
-        # extract the fields
         size_str, seq_num_str, ack_str, checksum, msg = self.split(packet)
-        
-        # save into object variables
+
         self.size = int(size_str)
         self.size_str = size_str
 
@@ -120,19 +100,18 @@ class Packet:
         self.ack = int(ack_str)
 
         self.checksum = checksum
-        
+
         self.msg = msg
 
         self.packet = packet
 
-        # split packet into its components
         return size_str, seq_num_str, ack_str, checksum, msg
-    
+
 
     def get_ack(self):
         if self.ack:
             return self.seq_num
-        
+
         return -1
 
 class Transport:
@@ -149,11 +128,10 @@ class Transport:
 
         if (len(text)):
             msgs.append(text)
-        
+
         return msgs
 
 
-    # join received messages into a single block of text
     def join(self, msgs):
         text = ""
 
@@ -163,43 +141,35 @@ class Transport:
         return text
 
 
-    # Send a block of text
     def send(self, rdt, text, metrics):
 
-        # split it
         msgs = self.split(text)
 
-        # send it
         rdt.rdt_4_0_send(msgs, metrics)
 
 
-    # Receive fragments of text
     def receive(self, rdt, metrics):
 
-        # receive it
         msgs = rdt.rdt_4_0_receive(metrics)
 
         if msgs == []:
             return None
-        
-        # join it
+
         text = self.join(msgs)
 
         return text
-    
+
 class RDT:
 
-    # parameters of the protocol
     window_len = 4
     modulo = window_len*2
 
-    # packet timeout, maybe 3s is better, but system is already very fast
+    # packet timeout (s)
     timeout = 1
 
-    # connection timeout:
-    # if, for 5 seconds duration, receiver doesn't receive any packets, terminate connection
+    # if the receiver gets no packets for this many seconds, it ends the connection
     connection_timeout = 5
-    
+
     def __init__(self, role_str, server_str, port):
         self.network = network.NetworkLayer(role_str, server_str, port)
 
@@ -231,7 +201,6 @@ class RDT:
             # invalid length: packet boundaries are lost, drop the buffer to resync
             if length < min_len:
                 debug_log(f"Received: CORRUPTED length, dropping buffer, at {format_time(time.time_ns())}" + f"\n\t {self.rx_buffer}\n")
-                # add corrupted received
                 metrics.add_corrupted_received()
                 self.rx_buffer = ""
                 break
@@ -240,7 +209,6 @@ class RDT:
             if len(self.rx_buffer) < length:
                 break
 
-            # extract first packet, leave the rest at the buffer
             packets.append(self.rx_buffer[0:length])
             self.rx_buffer = self.rx_buffer[length:]
 
@@ -252,8 +220,8 @@ class RDT:
 
         # next sequence number [0 to 7] to be sent
         nxt = 0
-        
-        # sequence number of the last not acknowledge packet inside window
+
+        # sequence number of the oldest unacknowledged packet in the window
         base = 0
 
         # window = {idx : [wasACK?, packet, timer] }
@@ -264,11 +232,10 @@ class RDT:
         debug_log("--------------------------------------------------\n")
 
         while(True):
-            
-            # stop condition: no more packets to send
+
             if (len(queue) == 0 and len(window) == 0):
 
-                # sleep for {connection_timeout} seconds to sync with receiver, so receiver can timeout
+                # wait {connection_timeout} seconds so the receiver times out before we move on
                 time.sleep(self.connection_timeout)
 
                 debug_log("##################################################")
@@ -276,10 +243,9 @@ class RDT:
                 debug_log("##################################################\n")
                 break
 
-            # Data received from above and inside window boundary
+            # data to send and room in the window
             if ((len(queue) > 0) and (len(window) < self.window_len)):
-                
-                # create a packet, buffer it into window
+
                 msg = queue.pop(0)
                 p = Packet()
                 p.code(nxt, msg, 0)
@@ -287,38 +253,24 @@ class RDT:
                 debug_log(f"First time: Sending packet {nxt}, at {format_time(time.time_ns())}" + f"\n\t {p.packet}\n")
                 nxt = (nxt + 1) % self.modulo
 
-                # send it!
                 self.network.udt_send(p.packet)
-                # add packet sent
                 metrics.add_packet_sent(p)
-                # add packet sent for the first time
                 metrics.add_packet_first_sent(p)
-                # if initialized, override end time for the last packet sent 
                 metrics.set_end()
-                # if not initialized, set start time for the first packet sent 
                 metrics.set_start()
 
-            # Check for timeouts
+            # resend only the packets whose timer expired
             for seq in window.keys():
                 wasAck, p, timer = window[seq]
 
                 if (not wasAck) and (timer + self.timeout < time.time()):
-                    # resend packet and update timer
                     debug_log(f"Timeout: Resend packet {seq}, at {format_time(time.time_ns())}" + f"\n\t {p.packet}\n")
                     window[seq][2] = time.time()
                     self.network.udt_send(p.packet)
-                    # add packet sent
                     metrics.add_packet_sent(p)
-                    # add retransmission sent
                     metrics.add_retransmission_sent(p)
-                    # if initialized, override end time for the last packet sent 
                     metrics.set_end()
 
-            # Check for received ACK packet
-            # received = None
-            # start_timer = time.time()
-            # try to read an packet from network for {self.timeout}/2 seconds
-            # while (received == None and (time.time() < (start_timer + self.timeout/2))):
             _, packets = self.read_packets(metrics)
 
             for received in packets:
@@ -340,24 +292,22 @@ class RDT:
                             base = idx
                 else:
                     debug_log(f"Received: CORRUPTED packet, at {format_time(time.time_ns())}" + f"\n\t {received}\n")
-                    # add corrupted received
                     metrics.add_corrupted_received()
 
     def rdt_4_0_receive(self, metrics):
 
-        # buffer that will be sent to the next layer
+        # fragments delivered in order to the transport layer
         msgs = []
-        
-        # sequence number of the last not acknowledge packet inside window
+
+        # sequence number of the oldest packet not yet received
         base = 0
 
-        # list of indexes in the range = [base-N, base-1] (arithmetic modular)
-        # because the modulo chosen is twice the window's length, behind_window will be complementar to window
+        # behind = [base-N, base-1], window_range = [base, base+N-1] (modular arithmetic)
+        # because the modulo is twice the window length, the two sets are complementary
         behind = {4, 5, 6, 7}
         window_range = {0, 1, 2, 3}
 
-        # window = {idx : packet}
-        # window only supports idx in the range [base, base+N-1]
+        # window = {idx : packet}, buffers out-of-order packets inside window_range
         window = {}
 
         last_timer = time.time()
@@ -368,22 +318,15 @@ class RDT:
 
         while(True):
 
-            # stop condition: no packets received for at least {connection_timeout} => timeout
             if (last_timer + self.connection_timeout < time.time()):
                 debug_log("##################################################")
                 debug_log(f"Time limit: Stopped receiving packets at {format_time(time.time_ns())}")
                 debug_log("##################################################\n")
                 break
-            
-            # check for received packet
-            # received = None
-            # start_timer = time.time()
-            # try to read an packet from network for {self.timeout}/2 seconds
-            # while (received == None and (time.time() < (start_timer + self.timeout/2))):
+
             got_data, packets = self.read_packets(metrics)
 
             if (got_data):
-                # received data, update last time
                 last_timer = time.time()
 
             for received in packets:
@@ -394,38 +337,29 @@ class RDT:
                     num = p.seq_num
                     debug_log(f"Received: Reading non corrupted packet {num}, at {format_time(time.time_ns())}" + f"\n\t {p.packet}\n")
 
-                    # already received packet, but sender might be behind
-                    # just send ack, don't buffer it
+                    # already delivered, but our ACK may have been lost: ACK again, don't buffer
                     if num in behind:
                         a = Packet()
                         a.code(num, "", 1)
                         debug_log(f"Sending ACK: for packet {num}, at {format_time(time.time_ns())}" + f"\n\t {a.packet}\n")
                         self.network.udt_send(a.packet)
-                        # if initialized, override end time for the last packet sent
                         metrics.set_end()
-                        # if not initialized, set start time for the first packet sent
                         metrics.set_start()
-                        # add packet sent (ack)
                         metrics.add_packet_sent(a)
 
-                    # packed inside window range
-                    # send ack and buffer it
+                    # inside the window: ACK and buffer it
                     elif num in window_range:
                         a = Packet()
                         a.code(num, "", 1)
                         debug_log(f"Sending ACK: for packet {num}, at {format_time(time.time_ns())}" + f"\n\t {a.packet}\n")
                         self.network.udt_send(a.packet)
-                        # if initialized, override end time for the last packet sent
                         metrics.set_end()
-                        # if not initialized, set start time for the first packet sent
                         metrics.set_start()
-                        # add packet sent (ack)
                         metrics.add_packet_sent(a)
 
-                        # buffer packet
                         window[num] = p
 
-                        # slide window
+                        # deliver consecutive buffered packets and slide the window
                         if (num == base):
                             idx = base
                             while(idx in window):
@@ -434,7 +368,6 @@ class RDT:
                                     msgs.append(window[idx].msg)
                                 window.pop(idx)
 
-                                # update ranges
                                 behind.remove((idx-self.window_len+self.modulo) % self.modulo)
                                 behind.add(idx)
                                 window_range.remove(idx)
@@ -446,7 +379,6 @@ class RDT:
 
                 else:
                     debug_log(f"Received: CORRUPTED packet, at {format_time(time.time_ns())}" + f"\n\t {received}\n")
-                    # add corrupted received
                     metrics.add_corrupted_received()
         return msgs
-    
+

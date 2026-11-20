@@ -25,7 +25,6 @@ if __name__ == '__main__':
 
     try:
 
-        # Send all messages
         for text in document:
 
             metricsClientSender = Metrics("Client - Sender")
@@ -33,28 +32,14 @@ if __name__ == '__main__':
 
             transport.send(rdt, text, metricsClientSender)
             reply = transport.receive(rdt, metricsClientReceiver)
-            
-            # print the result
+
             print("||||||||||||||||||||||||||||||||||||||||||||||||||")
             print(f'Client: Original Sentence: \n\t{text}')
             print(f'Client: Converted Sentence Received: \n\t{reply}')
             print("||||||||||||||||||||||||||||||||||||||||||||||||||\n")
 
-        # Sender
         metricsClientSender.plot_simulation_time()
-        # metricsClientSender.plot_corrupted()
-        # metricsClientSender.plot_sentPacket()
-        # metricsClientSender.plot_retransmissions()
-        # metricsClientSender.plot_throughput()
-        # metricsClientSender.plot_goodput()
-
-        # Receiver
         metricsClientReceiver.plot_simulation_time()
-        # metricsClientReceiver.plot_corrupted()
-        # metricsClientReceiver.plot_sentPacket()
-        # metricsClientReceiver.plot_retransmissions()
-        # metricsClientReceiver.plot_throughput()
-        # metricsClientReceiver.plot_goodput()
 
     except (KeyboardInterrupt, SystemExit):
         rdt.disconnect()
@@ -68,5 +53,4 @@ if __name__ == '__main__':
         rdt.disconnect()
         print("Connection ended.")
 
-    # close socket
     del rdt

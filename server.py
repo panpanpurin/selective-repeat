@@ -43,21 +43,8 @@ if __name__ == '__main__':
                 print(f'Server: Converted Sentence Received: \n\t{reply}')
                 print("||||||||||||||||||||||||||||||||||||||||||||||||||\n")
 
-                # Receiver
                 metricsServerReceiver.plot_simulation_time()
-                # metricsServerReceiver.plot_corrupted(1)
-                # metricsServerReceiver.plot_sentPacket(1)
-                # metricsServerReceiver.plot_retransmissions(1)
-                # metricsServerReceiver.plot_throughput(1)
-                # metricsServerReceiver.plot_goodput(1)
-
-                # Sender
                 metricsServerSender.plot_simulation_time()
-                # metricsServerSender.plot_corrupted(1)
-                # metricsServerSender.plot_sentPacket(1)
-                # metricsServerSender.plot_retransmissions(1)
-                # metricsServerSender.plot_throughput(1)
-                # metricsServerSender.plot_goodput(1)
 
     except (KeyboardInterrupt, SystemExit):
         rdt.disconnect()
@@ -71,5 +58,4 @@ if __name__ == '__main__':
         rdt.disconnect()
         print("Connection ended.")
 
-    # close socket
     del rdt
