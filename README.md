@@ -13,6 +13,8 @@ The main objective of this project is to work within a layered network architect
 
 - **Selective Repeat:** Implementation of the more advanced version of the protocol, introducing selective repeat mechanisms for sliding window operation.
 
+- **FIN handshake:** The sender ends each message with a FIN packet, which is resent until it's ACKed like any data packet, so the receiver knows the message is complete right away instead of waiting for a timeout. If the ACK for the FIN is lost, the sender stops when the receiver starts sending its reply, since that proves the FIN arrived. As a last resort, it gives up after 5 resends. Sequence numbers continue from one message to the next, so a late copy of an old packet is recognized as old and never taken as new data.
+
 ### Provided Statistics
 
 At the end of a run, the client prints the following statistics for each of its two roles. They are added up across all messages. **Sender** covers the data the client sends; **Receiver** covers the replies it receives and the ACKs it sends back.
@@ -69,5 +71,5 @@ python client.py localhost 5000 --loss 0.2 --corrupt 0 --reorder 0 --plots plots
 python scenarios.py -n 5
 ```
 
-The scenarios use ports 5000 to 5004 (change the first one with `--port`), and a run takes about 2 to 3 minutes.
+The scenarios use ports 5000 to 5004 (change the first one with `--port`), and a run takes about 1 to 2 minutes.
 ---

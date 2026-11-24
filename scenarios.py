@@ -33,10 +33,10 @@ if __name__ == '__main__':
         server_log = open(os.path.join(out, 'server.log'), 'w')
         client_log = open(os.path.join(out, 'client.log'), 'w')
 
-        server = subprocess.Popen([sys.executable, os.path.join(here, 'server.py'), port] + errors,
+        server = subprocess.Popen([sys.executable, '-u', os.path.join(here, 'server.py'), port] + errors,
                                   stdout=server_log, stderr=subprocess.STDOUT)
         time.sleep(1)  # let the server start listening
-        client = subprocess.Popen([sys.executable, os.path.join(here, 'client.py'), 'localhost', port,
+        client = subprocess.Popen([sys.executable, '-u', os.path.join(here, 'client.py'), 'localhost', port,
                                    '-n', str(args.messages), '--plots', out] + errors,
                                   stdout=client_log, stderr=subprocess.STDOUT)
         runs.append((name, server, client, server_log, client_log))

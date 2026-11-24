@@ -40,6 +40,9 @@ if __name__ == '__main__':
                 reply = upperCase(text)
                 transport.send(rdt, reply, metricsServerSender)
 
+                # sending can take long on a bad network; idle time counts from here
+                last_received_time = time.time()
+
                 print("||||||||||||||||||||||||||||||||||||||||||||||||||")
                 print(f'Server: Original Sentence: \n\t{text}')
                 print(f'Server: Converted Sentence Received: \n\t{reply}')
