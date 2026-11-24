@@ -6,6 +6,13 @@ import random
 import rdt
 
 
+## command-line options for the simulated error rates, shared by client and server
+def add_error_args(parser):
+    parser.add_argument('--loss', type=float, default=None, help='Packet loss probability (default: 0.1).')
+    parser.add_argument('--corrupt', type=float, default=None, help='Packet corruption probability (default: 0.1).')
+    parser.add_argument('--reorder', type=float, default=None, help='Packet reorder probability (default: 0.1).')
+
+
 ## Provides an abstraction for the network layer
 class NetworkLayer:
     # configuration parameters
@@ -22,7 +29,12 @@ class NetworkLayer:
     socket_timeout = 0.1
     reorder_msg_S = None
 
-    def __init__(self, role_S, server_S, port):
+    def __init__(self, role_S, server_S, port, loss=None, corrupt=None, reorder=None):
+        if loss is not None: self.prob_pkt_loss = loss
+        if corrupt is not None: self.prob_byte_corr = corrupt
+        if reorder is not None: self.prob_pkt_reorder = reorder
+        print(f'Network: loss={self.prob_pkt_loss} corruption={self.prob_byte_corr} reorder={self.prob_pkt_reorder}')
+
         if role_S == 'client':
             print('Network: role is client')
             self.conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

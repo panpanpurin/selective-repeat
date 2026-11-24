@@ -1,4 +1,7 @@
+import os
 import time
+import matplotlib
+matplotlib.use("Agg")  # plots are saved to files, no window needed
 import matplotlib.pyplot as plt
 from rdt import Packet
 
@@ -7,6 +10,8 @@ def format_time(val):
     us = (val//1000) % 1000000
     f_time += f".{us:3d} us"
     return f_time
+
+HEADER_LEN = Packet.size_len + Packet.seq_num_len + Packet.checksum_len + 1
 
 class Metrics:
     def __init__(self, label=""):
@@ -53,125 +58,94 @@ class Metrics:
         t = time.time_ns()
         self.corrupted_received.append(t)
 
+    def elapsed(self):
+        if self.start_time is None or self.end_time is None:
+            return 0
+        return (self.end_time - self.start_time) / 1000000000
+
+    def throughput(self):
+        total = sum(len(p.packet) for _, p in self.packets_sent)
+        return total / self.elapsed() if self.elapsed() else 0
+
+    def goodput(self):
+        total = sum(len(p.packet) - HEADER_LEN for _, p in self.packets_first_sent)
+        return total / self.elapsed() if self.elapsed() else 0
+
     def plot_simulation_time(self):
+        if self.start_time is None:
+            print(f"For {self.label}: nothing was sent\n")
+            return
         print(f"For {self.label}")
         print("Start time: " + format_time(self.start_time) )
         print("End time: " + format_time(self.end_time ) )
-        print(f"Difference: {(self.end_time-self.start_time)/1000000000 } (s) \n")
-    
-    def plot_corrupted(self, isOrange=0):
+        print(f"Difference: {self.elapsed()} (s) \n")
+
+    # data=False skips retransmissions and goodput, which are always zero on the receiving side
+    def print_summary(self, data=True):
+        print(f"Summary for {self.label}")
+        print(f"\tSimulation time: {self.elapsed():.3f} s")
+        print(f"\tTransmitted packets: {len(self.packets_sent)}")
+        if data:
+            print(f"\tRetransmissions: {len(self.retransmissions_sent)}")
+        print(f"\tCorrupted packets received: {len(self.corrupted_received)}")
+        print(f"\tThroughput: {self.throughput():.2f} B/s")
+        if data:
+            print(f"\tGoodput: {self.goodput():.2f} B/s")
+        print()
+
+    # x = seconds since start, y = running total of `weights`
+    def _plot_cumulative(self, path, title, ylabel, times, weights=None, isOrange=0):
         plt.figure(figsize=(12, 6))
+        plt.title(title)
+        plt.xlabel("Time (s)")
+        plt.ylabel(ylabel)
 
-        plt.title(f"Corrupted Packets in {self.label}")
-
-        plt.xlabel("Time (us)")
-        plt.ylabel("Corrupted Packets (unit)")
-
+        start = self.start_time or 0
         x = []
         y = []
-        for i, t in enumerate(self.corrupted_received):
-            y.append(i+1)
-            x.append((t - self.start_time)/1000)
-        
-        plt.plot(x, y, marker="o", color=("tab:orange" if isOrange else "tab:blue"))
-        
-        plt.grid(True)
-        plt.tight_layout()
-
-        plt.show()
-
-    def plot_retransmissions(self, isOrange=0):
-        plt.figure(figsize=(12, 6))
-
-        plt.title(f"Retransmitted Packets in {self.label}")
-
-        plt.xlabel("Time (us)")
-        plt.ylabel("Retransmitted Packets (unit)")
-
-        x = []
-        y = []
-        for i, (t, p) in enumerate(self.retransmissions_sent):
-            y.append(i+1)
-            x.append((t - self.start_time)/1000)
-        
-        plt.plot(x, y, marker="o", color=("tab:orange" if isOrange else "tab:blue"))
-        
-        plt.grid(True)
-        plt.tight_layout()
-
-        plt.show()
-    
-    def plot_sentPacket(self, isOrange=0):
-        plt.figure(figsize=(12, 6))
-
-        plt.title(f"All Transmitted Packets in {self.label}")
-
-        plt.xlabel("Time (us)")
-        plt.ylabel("Transmitted Packets (unit)")
-
-        x = []
-        y = []
-        for i, (t, p) in enumerate(self.packets_sent):
-            y.append(i+1)
-            x.append((t - self.start_time)/1000)
-        
-        plt.plot(x, y, marker="o", color=("tab:orange" if isOrange else "tab:blue"))
-        
-        plt.grid(True)
-        plt.tight_layout()
-
-        plt.show()
-
-    def plot_throughput(self, isOrange=0):
-        plt.figure(figsize=(12, 6))
-
-        plt.xlabel("Time (us)")
-        plt.ylabel("Transmitted Data (Bytes)")
-
-        x = []
-        y = []
-
         acc = 0
-        for t, p in self.packets_sent:
-            n = len(p.packet)
-            acc += n
-
+        for i, t in enumerate(times):
+            acc += weights[i] if weights else 1
+            x.append((t - start) / 1000000000)
             y.append(acc)
-            x.append((t - self.start_time)/1000)
-        
-        plt.plot(x, y, marker="o", color=("tab:orange" if isOrange else "tab:blue"))
-        
-        throughput = acc * 1000000000 / (self.end_time - self.start_time)
-        plt.title(f"Throughput in {self.label}: {throughput} (B/s)")
 
+        plt.plot(x, y, marker="o", color=("tab:orange" if isOrange else "tab:blue"))
         plt.grid(True)
         plt.tight_layout()
+        plt.savefig(path)
+        plt.close()
 
-        plt.show()
+    def plot_corrupted(self, path, isOrange=0):
+        self._plot_cumulative(path, f"Corrupted Packets in {self.label}: {len(self.corrupted_received)}",
+                              "Corrupted Packets (unit)", self.corrupted_received, isOrange=isOrange)
 
-    def plot_goodput(self, isOrange=0):
-        plt.figure(figsize=(12, 6))
+    def plot_retransmissions(self, path, isOrange=0):
+        self._plot_cumulative(path, f"Retransmitted Packets in {self.label}: {len(self.retransmissions_sent)}",
+                              "Retransmitted Packets (unit)", [t for t, _ in self.retransmissions_sent], isOrange=isOrange)
 
-        plt.xlabel("Time (us)")
-        plt.ylabel("Transmitted Data (Bytes)")
+    def plot_sentPacket(self, path, isOrange=0):
+        self._plot_cumulative(path, f"All Transmitted Packets in {self.label}: {len(self.packets_sent)}",
+                              "Transmitted Packets (unit)", [t for t, _ in self.packets_sent], isOrange=isOrange)
 
-        x = []
-        y = []
+    def plot_throughput(self, path, isOrange=0):
+        self._plot_cumulative(path, f"Throughput in {self.label}: {self.throughput():.2f} (B/s)",
+                              "Transmitted Data (Bytes)", [t for t, _ in self.packets_sent],
+                              [len(p.packet) for _, p in self.packets_sent], isOrange=isOrange)
 
-        acc = 0
-        for t, p in self.packets_first_sent:
-            n = len(p.packet) - (Packet.size_len + Packet.seq_num_len + Packet.checksum_len + 1)
-            acc += n
+    def plot_goodput(self, path, isOrange=0):
+        self._plot_cumulative(path, f"Goodput in {self.label}: {self.goodput():.2f} (B/s)",
+                              "Transmitted Data (Bytes)", [t for t, _ in self.packets_first_sent],
+                              [len(p.packet) - HEADER_LEN for _, p in self.packets_first_sent], isOrange=isOrange)
 
-            y.append(acc)
-            x.append((t - self.start_time)/1000)
-        
-        plt.plot(x, y, marker="o", color=("tab:orange" if isOrange else "tab:blue"))
-        
-        goodput = acc * 1000000000 / (self.end_time - self.start_time)
-        plt.title(f"Goodput in {self.label}: {goodput} (B/s)")
+    # save every plot into `directory`, file names prefixed with `prefix`
+    # data=False skips retransmissions and goodput, which are always empty on the receiving side
+    def save_plots(self, directory, prefix, data=True, isOrange=0):
+        os.makedirs(directory, exist_ok=True)
+        path = lambda name: os.path.join(directory, f"{prefix}_{name}.png")
 
-        plt.grid(True)
-        plt.tight_layout()
-
-        plt.show()
+        self.plot_sentPacket(path("sent"), isOrange)
+        self.plot_throughput(path("throughput"), isOrange)
+        self.plot_corrupted(path("corrupted"), isOrange)
+        if data:
+            self.plot_retransmissions(path("retransmissions"), isOrange)
+            self.plot_goodput(path("goodput"), isOrange)

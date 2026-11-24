@@ -170,8 +170,8 @@ class RDT:
     # if the receiver gets no packets for this many seconds, it ends the connection
     connection_timeout = 5
 
-    def __init__(self, role_str, server_str, port):
-        self.network = network.NetworkLayer(role_str, server_str, port)
+    def __init__(self, role_str, server_str, port, loss=None, corrupt=None, reorder=None):
+        self.network = network.NetworkLayer(role_str, server_str, port, loss, corrupt, reorder)
 
         # bytes read from the network that don't form a complete packet yet,
         # kept between reads because TCP may split a packet across them

@@ -1,12 +1,15 @@
 import argparse
 from rdt import RDT, Transport
 from metrics import Metrics
+from network import add_error_args
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Quotation client talking to an UPPER CASE server.')
     parser.add_argument('server', help='Server.')
     parser.add_argument('port', help='Port.', type=int)
     parser.add_argument('-n', '--messages', help='Number of messages to send (default: 5).', type=int, default=5)
+    parser.add_argument('--plots', help='Directory to save the metric plots in (default: no plots).', default=None)
+    add_error_args(parser)
     args = parser.parse_args()
 
     quotes = [
@@ -20,15 +23,16 @@ if __name__ == '__main__':
     # repeat the quotes if more messages than quotes are requested
     document = [quotes[i % len(quotes)] for i in range(args.messages)]
 
-    rdt = RDT('client', args.server, args.port)
+    rdt = RDT('client', args.server, args.port, args.loss, args.corrupt, args.reorder)
     transport = Transport()
+
+    # accumulated across all messages
+    metricsClientSender = Metrics("Client - Sender")
+    metricsClientReceiver = Metrics("Client - Receiver")
 
     try:
 
         for text in document:
-
-            metricsClientSender = Metrics("Client - Sender")
-            metricsClientReceiver = Metrics("Client - Receiver")
 
             transport.send(rdt, text, metricsClientSender)
             reply = transport.receive(rdt, metricsClientReceiver)
@@ -38,8 +42,13 @@ if __name__ == '__main__':
             print(f'Client: Converted Sentence Received: \n\t{reply}')
             print("||||||||||||||||||||||||||||||||||||||||||||||||||\n")
 
-        metricsClientSender.plot_simulation_time()
-        metricsClientReceiver.plot_simulation_time()
+        metricsClientSender.print_summary()
+        metricsClientReceiver.print_summary(data=False)
+
+        if args.plots:
+            metricsClientSender.save_plots(args.plots, "sender")
+            metricsClientReceiver.save_plots(args.plots, "receiver", data=False, isOrange=1)
+            print(f"Plots saved in {args.plots}")
 
     except (KeyboardInterrupt, SystemExit):
         rdt.disconnect()

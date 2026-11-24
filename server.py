@@ -1,6 +1,7 @@
 import argparse
 from rdt import RDT, Transport
 from metrics import Metrics
+from network import add_error_args
 import time
 
 def upperCase(message):
@@ -11,9 +12,10 @@ def upperCase(message):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='UPPER CASE server.')
     parser.add_argument('port', help='Port.', type=int)
+    add_error_args(parser)
     args = parser.parse_args()
 
-    rdt = RDT('server', None, args.port)
+    rdt = RDT('server', None, args.port, args.loss, args.corrupt, args.reorder)
     transport = Transport()
 
     last_received_time = time.time()
