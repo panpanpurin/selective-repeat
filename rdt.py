@@ -304,8 +304,8 @@ class RDT:
 
         # behind = [base-N, base-1], window_range = [base, base+N-1] (modular arithmetic)
         # because the modulo is twice the window length, the two sets are complementary
-        behind = {4, 5, 6, 7}
-        window_range = {0, 1, 2, 3}
+        behind = set(range(self.window_len, self.modulo))
+        window_range = set(range(0, self.window_len))
 
         # window = {idx : packet}, buffers out-of-order packets inside window_range
         window = {}
@@ -334,6 +334,12 @@ class RDT:
                 p = Packet()
                 if (not p.corrupt(received)):
                     p.decode(received)
+
+                    # the receiver only expects data; a stray ACK is not a data packet
+                    if p.ack:
+                        debug_log(f"Received: ignoring ACK {p.seq_num}, at {format_time(time.time_ns())}" + f"\n\t {p.packet}\n")
+                        continue
+
                     num = p.seq_num
                     debug_log(f"Received: Reading non corrupted packet {num}, at {format_time(time.time_ns())}" + f"\n\t {p.packet}\n")
 
