@@ -4,7 +4,7 @@ import socket
 import threading
 from time import sleep
 import random
-import rdt
+from packet import Packet
 
 
 ## command-line options for the simulated error rates, shared by client and server
@@ -72,7 +72,7 @@ class NetworkLayer:
         
         # corrupt a packet: replace 1 to 5 consecutive characters with 'X'
         if random.random() < self.prob_byte_corr:
-            start = random.randint(rdt.Packet.size_len, len(msg_S) - 5)
+            start = random.randint(Packet.size_len, len(msg_S) - 5)
             num = random.randint(1, 5)
             repl_S = ''.join(random.sample('XXXXX', num))
             msg_S = msg_S[:start] + repl_S + msg_S[start + num:]

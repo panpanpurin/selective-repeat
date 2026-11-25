@@ -1,8 +1,7 @@
 import os
 import time
-from rdt import Packet, format_time
-
-HEADER_LEN = Packet.size_len + Packet.seq_num_len + Packet.checksum_len + 1
+from log import format_time
+from packet import Packet
 
 class Metrics:
     def __init__(self, label=""):
@@ -59,7 +58,7 @@ class Metrics:
         return total / self.elapsed() if self.elapsed() else 0
 
     def goodput(self):
-        total = sum(len(p.packet) - HEADER_LEN for _, p in self.packets_first_sent)
+        total = sum(len(p.packet) - Packet.header_len for _, p in self.packets_first_sent)
         return total / self.elapsed() if self.elapsed() else 0
 
     def plot_simulation_time(self):
@@ -132,7 +131,7 @@ class Metrics:
     def plot_goodput(self, path, isOrange=0):
         self._plot_cumulative(path, f"Goodput in {self.label}: {self.goodput():.2f} (B/s)",
                               "Transmitted Data (Bytes)", [t for t, _ in self.packets_first_sent],
-                              [len(p.packet) - HEADER_LEN for _, p in self.packets_first_sent], isOrange=isOrange)
+                              [len(p.packet) - Packet.header_len for _, p in self.packets_first_sent], isOrange=isOrange)
 
     # save every plot into `directory`, file names prefixed with `prefix`
     # data=False skips retransmissions and goodput, which are always empty on the receiving side

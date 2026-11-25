@@ -1,171 +1,9 @@
-import network
 import collections
 import threading
 import time
-import hashlib
-
-debug = True
-
-
-def debug_log(message):
-    if debug:
-        print(message)
-
-# format a time.time_ns() value in local time with microseconds
-def format_time(val):
-    f_time = time.strftime("%d-%m-%Y %H:%M:%S", time.localtime(val // 1000000000))
-    us = (val // 1000) % 1000000
-    return f_time + f".{us:06d}"
-
-class Packet:
-    # packet = [size, seq_num, ackFlag, checksum, data]
-
-    # values of the ackFlag field
-    DATA = 0
-    ACK = 1
-    FIN = 2  # end of message, sent and ACKed like a data packet
-
-    # field lengths in chars
-    size_len = 8
-    seq_num_len = 8
-    checksum_len = 32  # md5 in hex
-
-    size = None
-    size_str = None
-    seq_num = None
-    seq_num_str = None
-    ack = None
-    ack_str = None
-    checksum = None
-    msg = None
-    packet = None
-
-    def __init__(self, size_len=8, seq_num_len=8, checksum_len=32):
-        self.size_len = size_len
-        self.seq_num_len = seq_num_len
-        self.checksum_len = checksum_len
-
-    def code(self, seq_num, msg, is_ack=0):
-
-        self.size = self.size_len + self.seq_num_len + self.checksum_len + 1 + len(msg)
-        self.size_str = str(self.size).zfill(self.size_len)
-
-        self.seq_num = seq_num
-        self.seq_num_str = str(seq_num).zfill(self.seq_num_len)
-
-        self.ack = is_ack
-        self.ack_str = str(self.ack)
-
-        self.checksum = hashlib.md5((self.size_str + self.seq_num_str + self.ack_str + msg).encode('utf-8')).hexdigest()
-
-        self.msg = msg
-
-        self.packet = self.size_str + self.seq_num_str + self.ack_str + self.checksum + self.msg
-
-        return self.packet
-
-
-    def split(self, packet):
-
-        limits = [self.size_len,
-                  self.size_len + self.seq_num_len,
-                  self.size_len + self.seq_num_len + 1,
-                  self.size_len + self.seq_num_len + 1 + self.checksum_len]
-
-        size_str = packet[0 : limits[0]]
-        seq_num_str = packet[limits[0] : limits[1]]
-        ack_str = packet[limits[1] : limits[2]]
-        checksum = packet[limits[2] : limits[3]]
-        msg = packet[limits[3] : ]
-
-        return size_str, seq_num_str, ack_str, checksum, msg
-
-
-    def corrupt(self, packet):
-
-        size_str, seq_num_str, ack_str, checksum, msg = self.split(packet)
-
-        computed = hashlib.md5(str(size_str + seq_num_str + ack_str + msg).encode('utf-8')).hexdigest()
-
-        return checksum != computed
-
-
-    def decode(self, packet):
-
-        if self.corrupt(packet):
-            raise RuntimeError('Cannot extract packet: it is corrupted')
-
-        size_str, seq_num_str, ack_str, checksum, msg = self.split(packet)
-
-        self.size = int(size_str)
-        self.size_str = size_str
-
-        self.seq_num = int(seq_num_str)
-        self.seq_num_str = seq_num_str
-
-        self.ack_str = ack_str
-        self.ack = int(ack_str)
-
-        self.checksum = checksum
-
-        self.msg = msg
-
-        self.packet = packet
-
-        return size_str, seq_num_str, ack_str, checksum, msg
-
-
-    def get_ack(self):
-        if self.ack == Packet.ACK:
-            return self.seq_num
-
-        return -1
-
-class Transport:
-    packet_len = 5 # bytes per packet
-
-    # split message into fragments, which are fixed length packets of len={packet_len}
-    def split(self, text):
-
-        msgs = []
-        while( len(text) >= self.packet_len ):
-            msg = text[:self.packet_len]
-            msgs.append(msg)
-            text = text[self.packet_len:]
-
-        if (len(text)):
-            msgs.append(text)
-
-        return msgs
-
-
-    def join(self, msgs):
-        text = ""
-
-        for fragment in msgs:
-            text += fragment
-
-        return text
-
-
-    # queue a message and return right away, the protocol thread sends it
-    def send(self, rdt, text):
-
-        msgs = self.split(text)
-
-        rdt.send(msgs)
-
-
-    # wait for the next complete message
-    # returns None if the connection was closed or went silent
-    def receive(self, rdt):
-
-        msgs = rdt.receive()
-
-        if msgs is None:
-            return None
-
-        return self.join(msgs)
+from log import debug_log, format_time
+from network import NetworkLayer
+from packet import Packet
 
 # Full duplex: each endpoint has one protocol thread (see `run`) that owns both
 # a sending and a receiving window, so data flows in both directions at once.
@@ -193,7 +31,7 @@ class RDT:
     def __init__(self, role_str, server_str, port, sender_metrics, receiver_metrics, loss=None, corrupt=None, reorder=None):
         self.sender_metrics = sender_metrics
         self.receiver_metrics = receiver_metrics
-        self.network = network.NetworkLayer(role_str, server_str, port, loss, corrupt, reorder)
+        self.network = NetworkLayer(role_str, server_str, port, loss, corrupt, reorder)
         self.reset_state()
         self.start()
 
@@ -346,8 +184,6 @@ class RDT:
             self.rx_buffer += received
             self.last_read = time.time()
 
-        min_len = Packet.size_len + Packet.seq_num_len + 1 + Packet.checksum_len
-
         packets = []
         while len(self.rx_buffer) >= Packet.size_len:
 
@@ -358,7 +194,7 @@ class RDT:
                 length = -1
 
             # invalid length: packet boundaries are lost, drop the buffer to resync
-            if length < min_len:
+            if length < Packet.header_len:
                 debug_log(f"Received: CORRUPTED length, dropping buffer, at {format_time(time.time_ns())}" + f"\n\t {self.rx_buffer}\n")
                 self.receiver_metrics.add_corrupted_received()
                 self.rx_buffer = ""

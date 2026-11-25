@@ -1,5 +1,7 @@
 import argparse
-from rdt import RDT, Transport
+import log
+from rdt import RDT
+from transport import Transport
 from metrics import Metrics
 from network import add_error_args
 
@@ -11,8 +13,11 @@ def upperCase(message):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='UPPER CASE server.')
     parser.add_argument('port', help='Port.', type=int)
+    parser.add_argument('-q', '--quiet', help='Do not print the log of every packet.', action='store_true')
     add_error_args(parser)
     args = parser.parse_args()
+
+    log.debug = not args.quiet
 
     # accumulated across all messages
     metricsServerSender = Metrics("Server - Sender")

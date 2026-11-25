@@ -1,5 +1,7 @@
 import argparse
-from rdt import RDT, Transport
+import log
+from rdt import RDT
+from transport import Transport
 from metrics import Metrics
 from network import add_error_args
 
@@ -9,8 +11,11 @@ if __name__ == '__main__':
     parser.add_argument('port', help='Port.', type=int)
     parser.add_argument('-n', '--messages', help='Number of messages to send (default: 5).', type=int, default=5)
     parser.add_argument('--plots', help='Directory to save the metric plots in (default: no plots).', default=None)
+    parser.add_argument('-q', '--quiet', help='Do not print the log of every packet.', action='store_true')
     add_error_args(parser)
     args = parser.parse_args()
+
+    log.debug = not args.quiet
 
     # if matplotlib is missing, stop now instead of after the whole run
     if args.plots:

@@ -10,11 +10,13 @@ import threading
 import time
 import unittest
 
-import rdt
+import log
 from network import NetworkLayer
-from rdt import RDT, Packet, Transport
+from packet import Packet
+from rdt import RDT
+from transport import Transport
 
-rdt.debug = False
+log.debug = False
 
 
 class FakeNetwork:
@@ -349,11 +351,11 @@ class CloseTests(unittest.TestCase):
 class FormatTimeTests(unittest.TestCase):
 
     def test_microseconds_are_zero_padded(self):
-        self.assertTrue(rdt.format_time(1700000000 * 10**9 + 42000).endswith(".000042"))
+        self.assertTrue(log.format_time(1700000000 * 10**9 + 42000).endswith(".000042"))
 
     def test_uses_local_time(self):
         expected = time.strftime("%d-%m-%Y %H:%M:%S", time.localtime(1700000000))
-        self.assertEqual(rdt.format_time(1700000000 * 10**9), expected + ".000000")
+        self.assertEqual(log.format_time(1700000000 * 10**9), expected + ".000000")
 
 
 class NetworkTests(unittest.TestCase):

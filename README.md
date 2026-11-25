@@ -56,6 +56,22 @@ python server.py 5000
 python client.py localhost 5000 -n 5
 ```
 
+Both print a log of every packet; use `-q` to turn it off.
+
+### Code structure
+
+| File | Role |
+|---|---|
+| `client.py`, `server.py` | Applications |
+| `transport.py` | Splits messages into fragments and joins them back |
+| `rdt.py` | Selective repeat protocol: windows, timers, ACKs and FIN |
+| `packet.py` | Packet format and checksum |
+| `network.py` | Simulated network with loss, corruption and reordering, over TCP |
+| `metrics.py` | Statistics and plots |
+| `log.py` | Packet log and time format |
+| `scenarios.py` | Runs every error scenario |
+| `test_rdt.py` | Unit tests |
+
 ### Error rates
 
 The simulated network drops, corrupts and reorders packets with a probability of 0.1 each by default. Both the server and the client accept `--loss`, `--corrupt` and `--reorder` to change this. Each side applies its own rates to the packets it sends, so pass the same values to both:
