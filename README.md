@@ -1,4 +1,7 @@
-# Selective Repeat 
+# Selective Repeat
+
+[![Tests](https://github.com/panpanpurin/selective-repeat/actions/workflows/tests.yml/badge.svg)](https://github.com/panpanpurin/selective-repeat/actions/workflows/tests.yml)
+
 Implementation of the rdt4.0 protocol. The primary enhancement is the incorporation of the selective repeat mechanism, allowing for the seamless flow of multiple packets between a client and a server.
 
 ## Project Details
@@ -41,7 +44,7 @@ With `--plots <dir>`, the client also saves plots of these metrics over time as 
 
 The code is designed to allow the transmission of multiple messages between the client and server. The number of messages can be configured as a command-line argument for the client (`-n`, default 5).
 
-Install the dependencies (matplotlib, only needed for `--plots` and `scenarios.py`):
+Python 3.11 or newer is required. Install the dependencies (matplotlib, only needed for `--plots` and `scenarios.py`):
 
 ```bash
 pip install -r requirements.txt
@@ -56,7 +59,28 @@ python server.py 5000
 python client.py localhost 5000 -n 5
 ```
 
-Both print a log of every packet; use `-q` to turn it off.
+Both print a log of every packet; use `-q` to turn it off. With `-q`, the client prints each reply and the final statistics (this one is from `-n 2`, shortened; the numbers change from run to run):
+
+```
+Client: Original Sentence:
+        The good news about computers is that they do what you tell them to do. [...]
+Client: Converted Sentence Received:
+        THE GOOD NEWS ABOUT COMPUTERS IS THAT THEY DO WHAT YOU TELL THEM TO DO. [...]
+
+Summary for Client - Sender
+        Simulation time: 16.057 s
+        Transmitted packets: 91
+        Retransmissions: 32
+        Corrupted packets received: 3
+        Throughput: 304.30 B/s
+        Goodput: 17.50 B/s
+
+Summary for Client - Receiver
+        Simulation time: 21.059 s
+        Transmitted packets: 75
+        Corrupted packets received: 9
+        Throughput: 174.51 B/s
+```
 
 ### Code structure
 
@@ -107,9 +131,8 @@ It also accepts `--window` and `--timeout`. The scenarios use ports 5000 to 5004
 
 ### Tests
 
-The unit tests run the protocol against a fake network, so they need no server:
+The unit tests need no running server: most use a fake network, and a few use local sockets. They also run on GitHub on every push to `main` and on every pull request.
 
 ```bash
 python -m unittest
 ```
----
