@@ -23,28 +23,34 @@ if __name__ == '__main__':
     # repeat the quotes if more messages than quotes are requested
     document = [quotes[i % len(quotes)] for i in range(args.messages)]
 
-    rdt = RDT('client', args.server, args.port, args.loss, args.corrupt, args.reorder)
-    transport = Transport()
-
     # accumulated across all messages
     metricsClientSender = Metrics("Client - Sender")
     metricsClientReceiver = Metrics("Client - Receiver")
 
+    rdt = RDT('client', args.server, args.port, metricsClientSender, metricsClientReceiver, args.loss, args.corrupt, args.reorder)
+    transport = Transport()
+
     try:
+
+        # full duplex: queue every message, replies arrive while later messages are still being sent
+        for text in document:
+            transport.send(rdt, text)
 
         for text in document:
 
-            transport.send(rdt, text, metricsClientSender)
-            reply = transport.receive(rdt, metricsClientReceiver)
+            reply = transport.receive(rdt)
 
-            if reply is None and rdt.closed():
-                print("Client: the server closed the connection")
+            if reply is None:
+                print("Client: the server closed the connection or stopped answering")
                 break
 
             print("||||||||||||||||||||||||||||||||||||||||||||||||||")
             print(f'Client: Original Sentence: \n\t{text}')
             print(f'Client: Converted Sentence Received: \n\t{reply}')
             print("||||||||||||||||||||||||||||||||||||||||||||||||||\n")
+
+        rdt.flush()
+        rdt.disconnect()
 
         metricsClientSender.print_summary()
         metricsClientReceiver.print_summary(data=False)

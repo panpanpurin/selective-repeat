@@ -1,4 +1,6 @@
 import network
+import collections
+import threading
 import time
 import hashlib
 
@@ -146,24 +148,28 @@ class Transport:
         return text
 
 
-    def send(self, rdt, text, metrics):
+    # queue a message and return right away, the protocol thread sends it
+    def send(self, rdt, text):
 
         msgs = self.split(text)
 
-        rdt.rdt_4_0_send(msgs, metrics)
+        rdt.send(msgs)
 
 
-    def receive(self, rdt, metrics):
+    # wait for the next complete message
+    # returns None if the connection was closed or went silent
+    def receive(self, rdt):
 
-        msgs = rdt.rdt_4_0_receive(metrics)
+        msgs = rdt.receive()
 
-        if msgs == []:
+        if msgs is None:
             return None
 
-        text = self.join(msgs)
+        return self.join(msgs)
 
-        return text
-
+# Full duplex: each endpoint has one protocol thread (see `run`) that owns both
+# a sending and a receiving window, so data flows in both directions at once.
+# The two directions are independent: each has its own sequence numbers.
 class RDT:
 
     window_len = 4
@@ -172,32 +178,48 @@ class RDT:
     # packet timeout (s)
     timeout = 1
 
-    # if the receiver gets no packets for this many seconds, it stops waiting
-    connection_timeout = 5
+    # if nothing arrives for this many seconds, stop waiting for the peer
+    connection_timeout = 30
 
     # pause (s) when there is nothing to do, so waiting doesn't use 100% CPU
     idle_sleep = 0.001
 
-    # FIN resends without an ACK before the sender assumes the receiver is done and gone
-    fin_max_retries = 5
+    thread = None
 
-    def __init__(self, role_str, server_str, port, loss=None, corrupt=None, reorder=None):
+    def __init__(self, role_str, server_str, port, sender_metrics, receiver_metrics, loss=None, corrupt=None, reorder=None):
+        self.sender_metrics = sender_metrics
+        self.receiver_metrics = receiver_metrics
         self.network = network.NetworkLayer(role_str, server_str, port, loss, corrupt, reorder)
         self.reset_state()
+        self.start()
 
     # Sequence numbers continue from one message to the next instead of restarting at 0.
     # Because the modulo is twice the window length, a late copy of a packet from an
     # earlier message always falls in the receiver's `behind` set and is never taken as new data.
     def reset_state(self):
+        # protects everything below, notified when a message is complete or an ACK arrives
+        self.cond = threading.Condition()
+
+        self.stop = False        # disconnect() asks the protocol thread to stop
+        self.finished = False    # the protocol thread has stopped
+        self.error = None        # exception that stopped the protocol thread, if any
+
         # bytes read from the network that don't form a complete packet yet,
         # kept between reads because TCP may split a packet across them
         self.rx_buffer = ""
 
-        # raw packets read while sending that belong to the next receive
-        self.pending = []
+        # last time anything was read from the network
+        self.last_read = time.time()
 
-        # sender: next sequence number to use
+        # sender: fragments and FINs waiting for room in the window
+        self.send_queue = collections.deque()
+
+        # sender: next sequence number to use, and the oldest unacknowledged one
         self.send_next = 0
+        self.send_base = 0
+
+        # send_window = {seq : [wasACK?, packet, timer] }
+        self.send_window = {}
 
         # receiver: base = oldest sequence number not yet received
         # behind = [base-N, base-1], window_range = [base, base+N-1] (modular arithmetic)
@@ -209,19 +231,119 @@ class RDT:
         # {seq : packet}, buffers out-of-order packets inside recv_window_range
         self.recv_window = {}
 
+        # fragments of the message being received (its FIN hasn't arrived yet)
+        self.recv_msgs = []
+
+        # complete messages, each a list of fragments, waiting for receive()
+        self.received = collections.deque()
+
+    def start(self):
+        self.thread = threading.Thread(name='Protocol', target=self.run, daemon=True)
+        self.thread.start()
+
     def disconnect(self):
+        self.stop = True
+        if self.thread:
+            self.thread.join()
         self.network.disconnect()
 
     # whether the peer closed the connection
     def closed(self):
         return self.network.closed
 
+    # ---------------- called by the application ----------------
+
+    # queue a message: its fragments followed by the FIN that marks its end
+    def send(self, msgs):
+        with self.cond:
+            self.send_queue.extend((msg, Packet.DATA) for msg in msgs)
+            self.send_queue.append(("", Packet.FIN))
+
+    # wait for the next complete message and return its fragments
+    # returns None if the connection was closed or went silent
+    def receive(self):
+        with self.cond:
+            self.wait_until(lambda: self.received)
+            return self.received.popleft() if self.received else None
+
+    # wait until the peer has ACKed everything that was sent
+    # returns whether it did
+    def flush(self):
+        done = lambda: not self.send_queue and not self.send_window
+        with self.cond:
+            self.wait_until(done)
+            return done()
+
+    # wait for a condition, giving up if the protocol thread stopped or the peer went silent
+    def wait_until(self, condition):
+        start = time.time()
+
+        while not condition():
+
+            if self.error:
+                raise self.error
+
+            if self.finished:
+                return
+
+            if max(start, self.last_read) + self.connection_timeout < time.time():
+                debug_log("##################################################")
+                debug_log(f"Time limit: nothing received for {self.connection_timeout} s, at {format_time(time.time_ns())}")
+                debug_log("##################################################\n")
+                return
+
+            # wake up often so Ctrl+C works and the time limit is checked
+            self.cond.wait(0.1)
+
+    # ---------------- protocol thread ----------------
+
+    def run(self):
+        debug_log("--------------------------------------------------")
+        debug_log(f"Connection started at {format_time(time.time_ns())}")
+        debug_log("--------------------------------------------------\n")
+
+        try:
+            while not self.stop:
+
+                # check before reading, so data that arrived before the close is still processed
+                closed = self.closed()
+
+                if not self.step():
+                    if closed:
+                        debug_log("##################################################")
+                        debug_log(f"Connection closed by the peer at {format_time(time.time_ns())}")
+                        debug_log("##################################################\n")
+                        break
+
+                    time.sleep(self.idle_sleep)
+
+        except Exception as err:
+            self.error = err
+
+        finally:
+            with self.cond:
+                self.finished = True
+                self.cond.notify_all()
+
+    # one round of both directions, returns whether there was anything to send or read
+    def step(self):
+        with self.cond:
+            sent = self.send_new_packets()
+            self.resend_expired_packets()
+
+            got_data, packets = self.read_packets()
+            for received in packets:
+                self.handle_packet(received)
+
+            return sent or got_data
+
     # read from the network and extract every complete packet in the buffer
     # returns (whether anything was read, list of raw packets)
-    def read_packets(self, metrics):
+    def read_packets(self):
         received = self.network.udt_receive()
         if received:
             self.rx_buffer += received
+            self.last_read = time.time()
 
         min_len = Packet.size_len + Packet.seq_num_len + 1 + Packet.checksum_len
 
@@ -237,7 +359,7 @@ class RDT:
             # invalid length: packet boundaries are lost, drop the buffer to resync
             if length < min_len:
                 debug_log(f"Received: CORRUPTED length, dropping buffer, at {format_time(time.time_ns())}" + f"\n\t {self.rx_buffer}\n")
-                metrics.add_corrupted_received()
+                self.receiver_metrics.add_corrupted_received()
                 self.rx_buffer = ""
                 break
 
@@ -250,154 +372,118 @@ class RDT:
 
         return bool(received), packets
 
-    def send_ack(self, num, metrics):
+    # ACKs belong to our sending direction, data and FINs to the receiving one
+    def handle_packet(self, received):
+        p = Packet()
+
+        if p.corrupt(received):
+            debug_log(f"Received: CORRUPTED packet, at {format_time(time.time_ns())}" + f"\n\t {received}\n")
+            if self.looks_like_ack(received):
+                self.sender_metrics.add_corrupted_received()
+            else:
+                self.receiver_metrics.add_corrupted_received()
+            return
+
+        p.decode(received)
+
+        if p.ack == Packet.ACK:
+            self.handle_ack(p)
+        else:
+            self.handle_data(p)
+
+    # which direction a corrupted packet belongs to, only used for the metrics
+    # if the ackFlag itself was corrupted, a packet without data is taken as an ACK
+    def looks_like_ack(self, received):
+        _, _, ack_str, _, msg = Packet().split(received)
+        if ack_str in (str(Packet.DATA), str(Packet.FIN)):
+            return False
+        return ack_str == str(Packet.ACK) or msg == ""
+
+    # ---------------- sending direction ----------------
+
+    # send queued packets while there is room in the window
+    # returns whether anything was sent
+    def send_new_packets(self):
+        sent = False
+
+        while len(self.send_queue) > 0 and len(self.send_window) < self.window_len:
+
+            msg, kind = self.send_queue.popleft()
+            seq = self.send_next
+            p = Packet()
+            p.code(seq, msg, kind)
+            self.send_window[seq] = [False, p, time.time()]
+            self.send_next = (seq + 1) % self.modulo
+            debug_log(f"First time: Sending {'FIN' if kind == Packet.FIN else 'packet'} {seq}, at {format_time(time.time_ns())}" + f"\n\t {p.packet}\n")
+
+            self.sender_metrics.set_start()
+            self.network.udt_send(p.packet)
+            self.sender_metrics.add_packet_sent(p)
+            self.sender_metrics.add_packet_first_sent(p)
+            self.sender_metrics.set_end()
+            sent = True
+
+        return sent
+
+    # resend only the packets whose timer expired
+    def resend_expired_packets(self):
+        for seq, entry in self.send_window.items():
+            wasAck, p, timer = entry
+
+            if (not wasAck) and (timer + self.timeout < time.time()):
+                debug_log(f"Timeout: Resend packet {seq}, at {format_time(time.time_ns())}" + f"\n\t {p.packet}\n")
+                entry[2] = time.time()
+                self.network.udt_send(p.packet)
+                self.sender_metrics.add_packet_sent(p)
+                self.sender_metrics.add_retransmission_sent(p)
+                self.sender_metrics.set_end()
+
+    def handle_ack(self, p):
+        debug_log(f"Received ACK: Reading non corrupted ACK {p.seq_num}, at {format_time(time.time_ns())}" + f"\n\t {p.packet}\n")
+
+        if p.seq_num not in self.send_window:
+            return
+
+        self.send_window[p.seq_num][0] = True
+
+        # slide window
+        while self.send_base in self.send_window and self.send_window[self.send_base][0]:
+            self.send_window.pop(self.send_base)
+            self.send_base = (self.send_base + 1) % self.modulo
+
+        self.cond.notify_all()
+
+    # ---------------- receiving direction ----------------
+
+    def send_ack(self, num):
         a = Packet()
         a.code(num, "", Packet.ACK)
         debug_log(f"Sending ACK: for packet {num}, at {format_time(time.time_ns())}" + f"\n\t {a.packet}\n")
+        self.receiver_metrics.set_start()
         self.network.udt_send(a.packet)
-        metrics.set_end()
-        metrics.set_start()
-        metrics.add_packet_sent(a)
+        self.receiver_metrics.add_packet_sent(a)
+        self.receiver_metrics.set_end()
 
-    def rdt_4_0_send(self, msgs, metrics):
+    def handle_data(self, p):
+        num = p.seq_num
+        debug_log(f"Received: Reading non corrupted {'FIN' if p.ack == Packet.FIN else 'packet'} {num}, at {format_time(time.time_ns())}" + f"\n\t {p.packet}\n")
 
-        # fragments followed by the FIN that marks the end of the message
-        queue = [(msg, Packet.DATA) for msg in msgs] + [("", Packet.FIN)]
+        # already delivered, but our ACK may have been lost: ACK again, don't buffer
+        if num in self.recv_behind:
+            self.send_ack(num)
 
-        # next sequence number [0 to modulo-1] to be sent
-        nxt = self.send_next
+        # inside the window: ACK and buffer it
+        elif num in self.recv_window_range:
+            self.send_ack(num)
+            self.recv_window[num] = p
+            self.deliver()
 
-        # sequence number of the oldest unacknowledged packet in the window
-        base = self.send_next
+    # take consecutive buffered packets in order and slide the window
+    # a message is only handed over once its FIN arrives, so it is never incomplete
+    def deliver(self):
 
-        # window = {idx : [wasACK?, packet, timer] }
-        window = {}
-
-        fin_retries = 0
-        done = False
-
-        debug_log("--------------------------------------------------")
-        debug_log(f"Started sending packets at {format_time(time.time_ns())}")
-        debug_log("--------------------------------------------------\n")
-
-        while(not done):
-
-            if (len(queue) == 0 and len(window) == 0):
-                break
-
-            # data to send and room in the window
-            if ((len(queue) > 0) and (len(window) < self.window_len)):
-
-                msg, kind = queue.pop(0)
-                p = Packet()
-                p.code(nxt, msg, kind)
-                window[nxt] = [False, p, time.time()]
-                debug_log(f"First time: Sending {'FIN' if kind == Packet.FIN else 'packet'} {nxt}, at {format_time(time.time_ns())}" + f"\n\t {p.packet}\n")
-                nxt = (nxt + 1) % self.modulo
-
-                self.network.udt_send(p.packet)
-                metrics.add_packet_sent(p)
-                metrics.add_packet_first_sent(p)
-                metrics.set_end()
-                metrics.set_start()
-
-            # resend only the packets whose timer expired
-            for seq in window.keys():
-                wasAck, p, timer = window[seq]
-
-                if (not wasAck) and (timer + self.timeout < time.time()):
-
-                    # the FIN's ACK may be lost after the receiver has left for good
-                    # (e.g. the last reply of a session): don't resend it forever
-                    if p.ack == Packet.FIN:
-                        fin_retries += 1
-                        if fin_retries > self.fin_max_retries:
-                            debug_log("##################################################")
-                            debug_log(f"FIN not ACKed after {self.fin_max_retries} resends, assuming the receiver is done, at {format_time(time.time_ns())}")
-                            debug_log("##################################################\n")
-                            done = True
-                            break
-
-                    debug_log(f"Timeout: Resend packet {seq}, at {format_time(time.time_ns())}" + f"\n\t {p.packet}\n")
-                    window[seq][2] = time.time()
-                    self.network.udt_send(p.packet)
-                    metrics.add_packet_sent(p)
-                    metrics.add_retransmission_sent(p)
-                    metrics.set_end()
-
-            if done:
-                break
-
-            # check before reading, so data that arrived before the close is still processed
-            closed = self.closed()
-            got_data, packets = self.read_packets(metrics)
-
-            if not got_data:
-                if closed:
-                    debug_log("##################################################")
-                    debug_log(f"Connection closed by the peer: Stopped sending at {format_time(time.time_ns())}")
-                    debug_log("##################################################\n")
-                    break
-
-                # nothing to read, and nothing to send until an ACK or a timeout
-                if len(queue) == 0 or len(window) >= self.window_len:
-                    time.sleep(self.idle_sleep)
-
-            for i, received in enumerate(packets):
-
-                p = Packet()
-                if p.corrupt(received):
-                    debug_log(f"Received: CORRUPTED packet, at {format_time(time.time_ns())}" + f"\n\t {received}\n")
-                    metrics.add_corrupted_received()
-                    continue
-
-                p.decode(received)
-
-                if p.ack == Packet.ACK:
-                    ack_num = p.seq_num
-                    debug_log(f"Received ACK: Reading non corrupted ACK {ack_num}, at {format_time(time.time_ns())}" + f"\n\t {p.packet}\n")
-                    if (ack_num in window):
-                        window[ack_num][0] = True
-
-                        # slide window
-                        if (ack_num == base):
-                            idx = base
-                            while(idx in window and window[idx][0]):
-                                window.pop(idx)
-                                idx = (idx + 1) % self.modulo
-                            base = idx
-
-                # a packet we already delivered: our ACK for it was lost, so ACK it again
-                elif p.seq_num in self.recv_behind:
-                    self.send_ack(p.seq_num, metrics)
-
-                # new data from the peer: it only starts sending after it received our
-                # whole message, FIN included, so we are done even if ACKs are missing.
-                # Keep this packet and the rest for the next receive.
-                else:
-                    if len(window) > 0:
-                        debug_log("##################################################")
-                        debug_log(f"Received new data while waiting for ACKs: the receiver got our FIN, terminating at {format_time(time.time_ns())}")
-                        debug_log("##################################################\n")
-                    self.pending = packets[i:]
-                    done = True
-                    break
-
-        if len(window) == 0:
-            debug_log("##################################################")
-            debug_log(f"Sent all packets and the FIN was ACKed, terminating at {format_time(time.time_ns())}")
-            debug_log("##################################################\n")
-
-        self.send_next = nxt
-
-    # deliver consecutive buffered packets in order and slide the window
-    # stops after a FIN so packets of a following message stay buffered
-    # returns whether the FIN was delivered
-    def deliver(self, msgs):
-        idx = self.recv_base
-        got_fin = False
-
-        while (idx in self.recv_window):
+        while (self.recv_base in self.recv_window):
+            idx = self.recv_base
             p = self.recv_window.pop(idx)
 
             self.recv_behind.remove((idx-self.window_len+self.modulo) % self.modulo)
@@ -405,88 +491,14 @@ class RDT:
             self.recv_window_range.remove(idx)
             self.recv_window_range.add((idx+self.window_len) % self.modulo)
 
-            idx = (idx + 1) % self.modulo
+            self.recv_base = (idx + 1) % self.modulo
 
             if p.ack == Packet.FIN:
-                got_fin = True
-                break
-
-            msgs.append(p.msg)
-
-        self.recv_base = idx
-        return got_fin
-
-    def rdt_4_0_receive(self, metrics):
-
-        # fragments delivered in order to the transport layer
-        msgs = []
-
-        last_timer = time.time()
-
-        debug_log("--------------------------------------------------")
-        debug_log(f"Started receiving packets at {format_time(time.time_ns())}")
-        debug_log("--------------------------------------------------\n")
-
-        got_fin = self.deliver(msgs)
-
-        while(not got_fin):
-
-            if (last_timer + self.connection_timeout < time.time()):
                 debug_log("##################################################")
-                debug_log(f"Time limit: Stopped receiving packets at {format_time(time.time_ns())}")
+                debug_log(f"Received FIN: message complete at {format_time(time.time_ns())}")
                 debug_log("##################################################\n")
-                break
-
-            # packets the sender already read for us come first
-            if self.pending:
-                packets, self.pending = self.pending, []
+                self.received.append(self.recv_msgs)
+                self.recv_msgs = []
+                self.cond.notify_all()
             else:
-                # check before reading, so data that arrived before the close is still processed
-                closed = self.closed()
-                got_data, packets = self.read_packets(metrics)
-                if (got_data):
-                    last_timer = time.time()
-                elif closed:
-                    debug_log("##################################################")
-                    debug_log(f"Connection closed by the peer: Stopped receiving at {format_time(time.time_ns())}")
-                    debug_log("##################################################\n")
-                    break
-                else:
-                    time.sleep(self.idle_sleep)
-
-            for received in packets:
-
-                p = Packet()
-                if p.corrupt(received):
-                    debug_log(f"Received: CORRUPTED packet, at {format_time(time.time_ns())}" + f"\n\t {received}\n")
-                    metrics.add_corrupted_received()
-                    continue
-
-                p.decode(received)
-
-                # the receiver only expects data; a stray ACK is not a data packet
-                if p.ack == Packet.ACK:
-                    debug_log(f"Received: ignoring ACK {p.seq_num}, at {format_time(time.time_ns())}" + f"\n\t {p.packet}\n")
-                    continue
-
-                num = p.seq_num
-                debug_log(f"Received: Reading non corrupted {'FIN' if p.ack == Packet.FIN else 'packet'} {num}, at {format_time(time.time_ns())}" + f"\n\t {p.packet}\n")
-
-                # already delivered, but our ACK may have been lost: ACK again, don't buffer
-                if num in self.recv_behind:
-                    self.send_ack(num, metrics)
-
-                # inside the window: ACK and buffer it
-                elif num in self.recv_window_range:
-                    self.send_ack(num, metrics)
-                    self.recv_window[num] = p
-
-                    if self.deliver(msgs):
-                        got_fin = True
-
-        if got_fin:
-            debug_log("##################################################")
-            debug_log(f"Received FIN: message complete at {format_time(time.time_ns())}")
-            debug_log("##################################################\n")
-
-        return msgs
+                self.recv_msgs.append(p.msg)

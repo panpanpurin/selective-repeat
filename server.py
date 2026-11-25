@@ -2,7 +2,6 @@ import argparse
 from rdt import RDT, Transport
 from metrics import Metrics
 from network import add_error_args
-import time
 
 def upperCase(message):
     capitalizedSentence = message.upper()
@@ -15,44 +14,36 @@ if __name__ == '__main__':
     add_error_args(parser)
     args = parser.parse_args()
 
-    rdt = RDT('server', None, args.port, args.loss, args.corrupt, args.reorder)
-    transport = Transport()
+    # accumulated across all messages
+    metricsServerSender = Metrics("Server - Sender")
+    metricsServerReceiver = Metrics("Server - Receiver")
 
-    last_received_time = time.time()
-    timeout_limit = 30
+    rdt = RDT('server', None, args.port, metricsServerSender, metricsServerReceiver, args.loss, args.corrupt, args.reorder)
+    transport = Transport()
 
     try:
 
         while(True):
             
-            if (last_received_time + timeout_limit < time.time()):
+            text = transport.receive(rdt)
+
+            # the client disconnected or went silent
+            if (text is None):
                 break
 
-            metricsServerSender = Metrics("Server - Sender")
-            metricsServerReceiver = Metrics("Server - Receiver")
+            # queued and sent while the next messages are still arriving
+            reply = upperCase(text)
+            transport.send(rdt, reply)
 
-            text = transport.receive(rdt, metricsServerReceiver)
+            print("||||||||||||||||||||||||||||||||||||||||||||||||||")
+            print(f'Server: Original Sentence: \n\t{text}')
+            print(f'Server: Converted Sentence Sent: \n\t{reply}')
+            print("||||||||||||||||||||||||||||||||||||||||||||||||||\n")
 
-            if (text):
+        rdt.disconnect()
 
-                last_received_time = time.time()
-
-                reply = upperCase(text)
-                transport.send(rdt, reply, metricsServerSender)
-
-                # sending can take long on a bad network; idle time counts from here
-                last_received_time = time.time()
-
-                print("||||||||||||||||||||||||||||||||||||||||||||||||||")
-                print(f'Server: Original Sentence: \n\t{text}')
-                print(f'Server: Converted Sentence Received: \n\t{reply}')
-                print("||||||||||||||||||||||||||||||||||||||||||||||||||\n")
-
-                metricsServerReceiver.plot_simulation_time()
-                metricsServerSender.plot_simulation_time()
-
-            elif (rdt.closed()):
-                break
+        metricsServerReceiver.plot_simulation_time()
+        metricsServerSender.plot_simulation_time()
 
     except (KeyboardInterrupt, SystemExit):
         rdt.disconnect()

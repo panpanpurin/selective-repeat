@@ -13,7 +13,9 @@ The main objective of this project is to work within a layered network architect
 
 - **Selective Repeat:** Implementation of the more advanced version of the protocol, introducing selective repeat mechanisms for sliding window operation.
 
-- **FIN handshake:** The sender ends each message with a FIN packet, which is resent until it's ACKed like any data packet, so the receiver knows the message is complete right away instead of waiting for a timeout. If the ACK for the FIN is lost, the sender stops when the receiver starts sending its reply, since that proves the FIN arrived. As a last resort, it gives up after 5 resends. Sequence numbers continue from one message to the next, so a late copy of an old packet is recognized as old and never taken as new data.
+- **Full duplex:** Data flows in both directions at the same time over one connection. Each endpoint runs a protocol thread that owns both a sending and a receiving window, each with its own sequence numbers. The client queues all its messages at once, and the server's replies arrive while later messages are still being sent.
+
+- **FIN handshake:** The sender ends each message with a FIN packet, which is resent until it's ACKed like any data packet, so the receiver knows the message is complete right away instead of waiting for a timeout, and never takes an incomplete message as complete. Both endpoints stop when the other closes the connection, or when nothing arrives for 30 seconds. Sequence numbers continue from one message to the next, so a late copy of an old packet is recognized as old and never taken as new data.
 
 ### Provided Statistics
 
@@ -27,7 +29,7 @@ At the end of a run, the client prints the following statistics for each of its 
 
 - **Total Retransmissions:** The count of data packets retransmitted after a timeout (sender only; ACKs are never retransmitted).
 
-- **Total Corrupted Packets:** The count of packets identified as corrupted. On the sender side these are ACKs; on the receiver side they are data packets.
+- **Total Corrupted Packets:** The count of packets identified as corrupted. On the sender side these are ACKs; on the receiver side they are data packets and FINs. If the corruption hit the packet's type, a packet without data is counted as an ACK.
 
 - **Simulation Time:** Elapsed time from the start of transmission to the last packet sent.
 
