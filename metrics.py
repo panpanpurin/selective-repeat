@@ -94,7 +94,8 @@ class Metrics:
         plt.xlabel("Time (s)")
         plt.ylabel(ylabel)
 
-        start = self.start_time or 0
+        # a corrupted packet may arrive before anything was sent
+        start = min([t for t in [self.start_time] + self.corrupted_received[:1] if t is not None], default=0)
         x = []
         y = []
         acc = 0
