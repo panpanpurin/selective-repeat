@@ -3,6 +3,7 @@ import os
 import subprocess
 import sys
 import time
+from options import add_protocol_options
 
 # name: (loss, corruption, reorder)
 SCENARIOS = {
@@ -18,6 +19,7 @@ if __name__ == '__main__':
     parser.add_argument('-n', '--messages', help='Messages per scenario (default: 5).', type=int, default=5)
     parser.add_argument('--port', help='First port; each scenario uses the next one (default: 5000).', type=int, default=5000)
     parser.add_argument('--out', help='Output directory (default: plots).', default='plots')
+    add_protocol_options(parser)
     args = parser.parse_args()
 
     here = os.path.dirname(os.path.abspath(__file__))
@@ -28,16 +30,17 @@ if __name__ == '__main__':
         port = str(args.port + i)
         out = os.path.join(args.out, name)
         os.makedirs(out, exist_ok=True)
-        errors = ['--loss', str(loss), '--corrupt', str(corrupt), '--reorder', str(reorder)]
+        options = ['--loss', str(loss), '--corrupt', str(corrupt), '--reorder', str(reorder),
+                   '--window', str(args.window), '--timeout', str(args.timeout)]
 
         server_log = open(os.path.join(out, 'server.log'), 'w')
         client_log = open(os.path.join(out, 'client.log'), 'w')
 
-        server = subprocess.Popen([sys.executable, '-u', os.path.join(here, 'server.py'), port] + errors,
+        server = subprocess.Popen([sys.executable, '-u', os.path.join(here, 'server.py'), port] + options,
                                   stdout=server_log, stderr=subprocess.STDOUT)
         time.sleep(1)  # let the server start listening
         client = subprocess.Popen([sys.executable, '-u', os.path.join(here, 'client.py'), 'localhost', port,
-                                   '-n', str(args.messages), '--plots', out] + errors,
+                                   '-n', str(args.messages), '--plots', out] + options,
                                   stdout=client_log, stderr=subprocess.STDOUT)
         runs.append((name, server, client, server_log, client_log))
         print(f"Started {name} on port {port}")

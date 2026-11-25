@@ -1,18 +1,18 @@
 import argparse
+import sys
 import log
 from rdt import RDT
 from transport import Transport
 from metrics import Metrics
-from network import add_error_args
+from options import add_options, positive_int
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Quotation client talking to an UPPER CASE server.')
     parser.add_argument('server', help='Server.')
     parser.add_argument('port', help='Port.', type=int)
-    parser.add_argument('-n', '--messages', help='Number of messages to send (default: 5).', type=int, default=5)
+    parser.add_argument('-n', '--messages', help='Number of messages to send (default: 5).', type=positive_int, default=5)
     parser.add_argument('--plots', help='Directory to save the metric plots in (default: no plots).', default=None)
-    parser.add_argument('-q', '--quiet', help='Do not print the log of every packet.', action='store_true')
-    add_error_args(parser)
+    add_options(parser)
     args = parser.parse_args()
 
     log.debug = not args.quiet
@@ -36,8 +36,11 @@ if __name__ == '__main__':
     metricsClientSender = Metrics("Client - Sender")
     metricsClientReceiver = Metrics("Client - Receiver")
 
-    rdt = RDT('client', args.server, args.port, metricsClientSender, metricsClientReceiver, args.loss, args.corrupt, args.reorder)
+    rdt = RDT('client', args.server, args.port, metricsClientSender, metricsClientReceiver,
+              args.loss, args.corrupt, args.reorder, args.window, args.timeout)
     transport = Transport()
+
+    exit_code = 0
 
     try:
 
@@ -50,13 +53,15 @@ if __name__ == '__main__':
             reply = transport.receive(rdt)
 
             if reply is None:
-                print("Client: the server closed the connection or stopped answering")
+                log.show("Client: the server closed the connection or stopped answering "
+                         "(is --window the same on both sides?)")
+                exit_code = 1
                 break
 
-            print("||||||||||||||||||||||||||||||||||||||||||||||||||")
-            print(f'Client: Original Sentence: \n\t{text}')
-            print(f'Client: Converted Sentence Received: \n\t{reply}')
-            print("||||||||||||||||||||||||||||||||||||||||||||||||||\n")
+            log.show("||||||||||||||||||||||||||||||||||||||||||||||||||\n"
+                     f"Client: Original Sentence: \n\t{text}\n"
+                     f"Client: Converted Sentence Received: \n\t{reply}\n"
+                     "||||||||||||||||||||||||||||||||||||||||||||||||||\n")
 
         rdt.flush()
         rdt.disconnect()
@@ -69,14 +74,14 @@ if __name__ == '__main__':
             metricsClientReceiver.save_plots(args.plots, "receiver", data=False, isOrange=1)
             print(f"Plots saved in {args.plots}")
 
-    except (KeyboardInterrupt, SystemExit):
-        rdt.disconnect()
+    except KeyboardInterrupt:
         print("Ending connection...")
 
-    except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
-        rdt.disconnect()
-        print("Ending connection...")
-        
+    except RuntimeError as err:
+        sys.exit(f"Error: {err}")
+
     finally:
         rdt.disconnect()
         print("Connection ended.")
+
+    sys.exit(exit_code)

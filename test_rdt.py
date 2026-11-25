@@ -1,3 +1,4 @@
+import argparse
 import contextlib
 import io
 import os
@@ -12,6 +13,7 @@ import unittest
 
 import log
 from network import NetworkLayer
+from options import add_options
 from packet import Packet
 from rdt import RDT
 from transport import Transport
@@ -99,7 +101,6 @@ class CountingMetrics:
 def make_rdt(net, window_len=4):
     r = RDT.__new__(RDT)
     r.window_len = window_len
-    r.modulo = window_len * 4
     r.sender_metrics = CountingMetrics()
     r.receiver_metrics = CountingMetrics()
     r.network = net if not isinstance(net, list) else FakeNetwork(net)
@@ -269,10 +270,10 @@ class DuplexTests(unittest.TestCase):
         self.assertEqual(r.sender_metrics.calls["add_corrupted_received"], 2)
         self.assertEqual(r.receiver_metrics.calls["add_corrupted_received"], 3)
 
-    def linked_pair(self, seed, error=0.0, delay=0.0):
+    def linked_pair(self, seed, error=0.0, delay=0.0, window_lens=(4, 4)):
         nets = [LinkedNetwork(seed, error, delay), LinkedNetwork(seed + 1, error, delay)]
         nets[0].peer, nets[1].peer = nets[1], nets[0]
-        pair = [make_rdt(net) for net in nets]
+        pair = [make_rdt(net, n) for net, n in zip(nets, window_lens)]
         for r in pair:
             r.timeout = 0.03
             r.connection_timeout = 10
@@ -298,6 +299,24 @@ class DuplexTests(unittest.TestCase):
             spans.append((min(times), max(times)))
         overlap = min(spans[0][1], spans[1][1]) - max(spans[0][0], spans[1][0])
         self.assertGreater(overlap, 0.8 * (spans[0][1] - spans[0][0]))
+
+    def test_other_window_lengths_survive_errors(self):
+        for n in (1, 2, 16):
+            with self.subTest(window_len=n):
+                a, b = self.linked_pair(n, error=0.2, window_lens=(n, n))
+                t = Transport()
+                texts = [f"message {i} with some text in it" for i in range(3)]
+                for text in texts:
+                    t.send(a, text)
+                    t.send(b, text)
+                self.assertEqual([t.receive(b) for _ in texts], texts)
+                self.assertEqual([t.receive(a) for _ in texts], texts)
+
+    def test_different_windows_give_an_error(self):
+        a, b = self.linked_pair(1, window_lens=(8, 2))
+        Transport().send(a, "long enough to use many sequence numbers " * 3)
+        with self.assertRaisesRegex(RuntimeError, "same --window"):
+            b.receive()
 
     def test_both_directions_survive_errors(self):
         for seed in range(0, 20, 2):
@@ -412,6 +431,19 @@ class NetworkTests(unittest.TestCase):
         fake, self.net.conn = self.net.conn, conn
         self.assertEqual(fake.sent.decode("utf-8"), msg)
 
+    def test_full_socket_waits_for_the_peer_to_read(self):
+        big = "x" * 5000000   # more than the socket buffers hold
+        total = []
+        def slow_reader():
+            time.sleep(0.5)   # several socket timeouts
+            while sum(total) < len(big):
+                total.append(len(self.peer.recv(65536)))
+        reader = threading.Thread(target=slow_reader, daemon=True)
+        reader.start()
+        self.net.udt_send(big)
+        reader.join(5)
+        self.assertEqual(sum(total), len(big))
+
     def test_disconnect_closes_the_connection(self):
         self.net.disconnect()
         self.peer.settimeout(1)
@@ -432,6 +464,25 @@ class NetworkTests(unittest.TestCase):
         self.assertTrue(self.wait_closed())
         for _ in range(3):
             self.net.udt_send(data(0, "a"))
+
+
+class OptionsTests(unittest.TestCase):
+
+    def parse(self, *args):
+        parser = argparse.ArgumentParser()
+        add_options(parser)
+        with contextlib.redirect_stderr(io.StringIO()):
+            return parser.parse_args(args)
+
+    def test_values(self):
+        args = self.parse("--window", "8", "--timeout", "0.5", "--loss", "0.2")
+        self.assertEqual((args.window, args.timeout, args.loss, args.corrupt), (8, 0.5, 0.2, None))
+
+    def test_invalid_values_are_rejected(self):
+        for bad in (("--window", "0"), ("--window", "x"), ("--timeout", "0"), ("--timeout", "inf"),
+                    ("--timeout", "nan"), ("--loss", "1.5"), ("--reorder", "-0.1")):
+            with self.subTest(bad=bad), self.assertRaises(SystemExit):
+                self.parse(*bad)
 
 
 class MetricsTests(unittest.TestCase):

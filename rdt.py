@@ -10,12 +10,15 @@ from packet import Packet
 # The two directions are independent: each has its own sequence numbers.
 class RDT:
 
+    # default window length, in packets
     window_len = 4
 
     # Twice the window length is only enough if packets are never reordered. The network
     # may release a held back packet after a newer one, when the window has already moved
     # past it, so a larger sequence space keeps old numbers from being taken as new ones.
-    modulo = window_len*4
+    @property
+    def modulo(self):
+        return self.window_len*4
 
     # packet timeout (s)
     timeout = 1
@@ -28,7 +31,16 @@ class RDT:
 
     thread = None
 
-    def __init__(self, role_str, server_str, port, sender_metrics, receiver_metrics, loss=None, corrupt=None, reorder=None):
+    def __init__(self, role_str, server_str, port, sender_metrics, receiver_metrics,
+                 loss=None, corrupt=None, reorder=None, window_len=None, timeout=None):
+        if window_len is not None: self.window_len = window_len
+        if timeout is not None: self.timeout = timeout
+
+        # a long timeout must not look like a silent peer
+        self.connection_timeout = max(self.connection_timeout, 5*self.timeout)
+
+        print(f'RDT: window={self.window_len} timeout={self.timeout} s')
+
         self.sender_metrics = sender_metrics
         self.receiver_metrics = receiver_metrics
         self.network = NetworkLayer(role_str, server_str, port, loss, corrupt, reorder)
@@ -82,6 +94,7 @@ class RDT:
 
     def disconnect(self):
         self.stop = True
+        self.network.stop = True  # also ends a send that is waiting for room in the socket
         if self.thread:
             self.thread.join()
         self.network.disconnect()
@@ -304,6 +317,11 @@ class RDT:
     def handle_data(self, p):
         num = p.seq_num
         debug_log(f"Received: Reading non corrupted {'FIN' if p.ack == Packet.FIN else 'packet'} {num}, at {format_time(time.time_ns())}" + f"\n\t {p.packet}\n")
+
+        # never happens with the same window on both sides
+        if num >= self.modulo:
+            raise RuntimeError(f"received sequence number {num}, but the largest one is {self.modulo - 1}: "
+                               "use the same --window on client and server")
 
         # outside the window means already delivered, but our ACK may have been lost: ACK again
         self.send_ack(num)

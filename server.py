@@ -1,9 +1,10 @@
 import argparse
+import sys
 import log
 from rdt import RDT
 from transport import Transport
 from metrics import Metrics
-from network import add_error_args
+from options import add_options
 
 def upperCase(message):
     capitalizedSentence = message.upper()
@@ -13,8 +14,7 @@ def upperCase(message):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='UPPER CASE server.')
     parser.add_argument('port', help='Port.', type=int)
-    parser.add_argument('-q', '--quiet', help='Do not print the log of every packet.', action='store_true')
-    add_error_args(parser)
+    add_options(parser)
     args = parser.parse_args()
 
     log.debug = not args.quiet
@@ -23,7 +23,8 @@ if __name__ == '__main__':
     metricsServerSender = Metrics("Server - Sender")
     metricsServerReceiver = Metrics("Server - Receiver")
 
-    rdt = RDT('server', None, args.port, metricsServerSender, metricsServerReceiver, args.loss, args.corrupt, args.reorder)
+    rdt = RDT('server', None, args.port, metricsServerSender, metricsServerReceiver,
+              args.loss, args.corrupt, args.reorder, args.window, args.timeout)
     transport = Transport()
 
     try:
@@ -40,24 +41,22 @@ if __name__ == '__main__':
             reply = upperCase(text)
             transport.send(rdt, reply)
 
-            print("||||||||||||||||||||||||||||||||||||||||||||||||||")
-            print(f'Server: Original Sentence: \n\t{text}')
-            print(f'Server: Converted Sentence Sent: \n\t{reply}')
-            print("||||||||||||||||||||||||||||||||||||||||||||||||||\n")
+            log.show("||||||||||||||||||||||||||||||||||||||||||||||||||\n"
+                     f"Server: Original Sentence: \n\t{text}\n"
+                     f"Server: Converted Sentence Sent: \n\t{reply}\n"
+                     "||||||||||||||||||||||||||||||||||||||||||||||||||\n")
 
         rdt.disconnect()
 
         metricsServerReceiver.plot_simulation_time()
         metricsServerSender.plot_simulation_time()
 
-    except (KeyboardInterrupt, SystemExit):
-        rdt.disconnect()
+    except KeyboardInterrupt:
         print("Ending connection...")
 
-    except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
-        rdt.disconnect()
-        print("Ending connection...")
-        
+    except RuntimeError as err:
+        sys.exit(f"Error: {err}")
+
     finally:
         rdt.disconnect()
         print("Connection ended.")

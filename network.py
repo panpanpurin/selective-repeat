@@ -7,13 +7,6 @@ import random
 from packet import Packet
 
 
-## command-line options for the simulated error rates, shared by client and server
-def add_error_args(parser):
-    parser.add_argument('--loss', type=float, default=None, help='Packet loss probability (default: 0.1).')
-    parser.add_argument('--corrupt', type=float, default=None, help='Packet corruption probability (default: 0.1).')
-    parser.add_argument('--reorder', type=float, default=None, help='Packet reorder probability (default: 0.1).')
-
-
 ## Provides an abstraction for the network layer
 class NetworkLayer:
     # configuration parameters
@@ -92,7 +85,13 @@ class NetworkLayer:
         totalsent = 0
         try:
             while totalsent < len(msg_bytes):
-                sent = self.conn.send(msg_bytes[totalsent:])
+                try:
+                    sent = self.conn.send(msg_bytes[totalsent:])
+                except socket.timeout:
+                    # the socket is full (large window): wait for the peer to read
+                    if self.stop or self.closed:
+                        return
+                    continue
                 if sent == 0:
                     raise RuntimeError("socket connection broken")
                 totalsent = totalsent + sent
