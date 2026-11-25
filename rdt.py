@@ -173,7 +173,11 @@ class Transport:
 class RDT:
 
     window_len = 4
-    modulo = window_len*2
+
+    # Twice the window length is only enough if packets are never reordered. The network
+    # may release a held back packet after a newer one, when the window has already moved
+    # past it, so a larger sequence space keeps old numbers from being taken as new ones.
+    modulo = window_len*4
 
     # packet timeout (s)
     timeout = 1
@@ -194,8 +198,8 @@ class RDT:
         self.start()
 
     # Sequence numbers continue from one message to the next instead of restarting at 0.
-    # Because the modulo is twice the window length, a late copy of a packet from an
-    # earlier message always falls in the receiver's `behind` set and is never taken as new data.
+    # A late copy of a packet from an earlier message falls outside the receiver's window,
+    # so it's ACKed again but never taken as new data.
     def reset_state(self):
         # protects everything below, notified when a message is complete or an ACK arrives
         self.cond = threading.Condition()
@@ -221,14 +225,11 @@ class RDT:
         # send_window = {seq : [wasACK?, packet, timer] }
         self.send_window = {}
 
-        # receiver: base = oldest sequence number not yet received
-        # behind = [base-N, base-1], window_range = [base, base+N-1] (modular arithmetic)
-        # because the modulo is twice the window length, the two sets are complementary
+        # receiver: oldest sequence number not yet received
+        # the window is [base, base+N-1] (modular arithmetic)
         self.recv_base = 0
-        self.recv_behind = set(range(self.window_len, self.modulo))
-        self.recv_window_range = set(range(0, self.window_len))
 
-        # {seq : packet}, buffers out-of-order packets inside recv_window_range
+        # {seq : packet}, buffers out-of-order packets inside the window
         self.recv_window = {}
 
         # fragments of the message being received (its FIN hasn't arrived yet)
@@ -468,13 +469,11 @@ class RDT:
         num = p.seq_num
         debug_log(f"Received: Reading non corrupted {'FIN' if p.ack == Packet.FIN else 'packet'} {num}, at {format_time(time.time_ns())}" + f"\n\t {p.packet}\n")
 
-        # already delivered, but our ACK may have been lost: ACK again, don't buffer
-        if num in self.recv_behind:
-            self.send_ack(num)
+        # outside the window means already delivered, but our ACK may have been lost: ACK again
+        self.send_ack(num)
 
-        # inside the window: ACK and buffer it
-        elif num in self.recv_window_range:
-            self.send_ack(num)
+        # inside the window: buffer it
+        if (num - self.recv_base) % self.modulo < self.window_len:
             self.recv_window[num] = p
             self.deliver()
 
@@ -483,15 +482,8 @@ class RDT:
     def deliver(self):
 
         while (self.recv_base in self.recv_window):
-            idx = self.recv_base
-            p = self.recv_window.pop(idx)
-
-            self.recv_behind.remove((idx-self.window_len+self.modulo) % self.modulo)
-            self.recv_behind.add(idx)
-            self.recv_window_range.remove(idx)
-            self.recv_window_range.add((idx+self.window_len) % self.modulo)
-
-            self.recv_base = (idx + 1) % self.modulo
+            p = self.recv_window.pop(self.recv_base)
+            self.recv_base = (self.recv_base + 1) % self.modulo
 
             if p.ack == Packet.FIN:
                 debug_log("##################################################")

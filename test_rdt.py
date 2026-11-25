@@ -95,7 +95,7 @@ class CountingMetrics:
 def make_rdt(net, window_len=4):
     r = RDT.__new__(RDT)
     r.window_len = window_len
-    r.modulo = window_len * 2
+    r.modulo = window_len * 4
     r.sender_metrics = CountingMetrics()
     r.receiver_metrics = CountingMetrics()
     r.network = net if not isinstance(net, list) else FakeNetwork(net)
@@ -137,8 +137,8 @@ class ReceiverTests(unittest.TestCase):
         return r
 
     def test_in_order_default_window(self):
-        frags = [f"m{i}" for i in range(10)]   # wraps past modulo 8
-        r = self.receive([data(i % 8, f) for i, f in enumerate(frags)] + [fin(2)])
+        frags = [f"m{i}" for i in range(20)]   # wraps past modulo 16
+        r = self.receive([data(i % 16, f) for i, f in enumerate(frags)] + [fin(4)])
         self.assertEqual(list(r.received), [frags])
 
     def test_out_of_order_is_reassembled(self):
@@ -153,12 +153,12 @@ class ReceiverTests(unittest.TestCase):
     def test_other_window_lengths(self):
         for n in (2, 3, 5):
             with self.subTest(window_len=n):
-                frags = [f"m{i}" for i in range(3 * n)]
+                frags = [f"m{i}" for i in range(6 * n)]
                 # deliver each window reversed to force buffering
                 order = []
                 for start in range(0, len(frags), n):
                     order += list(reversed(range(start, min(start + n, len(frags)))))
-                packets = [data(i % (2 * n), frags[i]) for i in order] + [fin(3 * n % (2 * n))]
+                packets = [data(i % (4 * n), frags[i]) for i in order] + [fin(2 * n)]
                 r = self.receive(packets, window_len=n)
                 self.assertEqual(list(r.received), [frags])
 
@@ -181,6 +181,13 @@ class ReceiverTests(unittest.TestCase):
     def test_empty_message(self):
         r = self.receive([fin(0)])
         self.assertEqual(Transport().receive(r), "")
+
+    def test_late_copy_released_after_a_newer_packet_is_not_new_data(self):
+        # the copy of 0 arrives right after 4, when the window is already [5, 8]
+        late = data(4, "m4") + data(0, "m0")
+        packets = [data(i, f"m{i}") for i in range(4)] + [late] + [data(i, f"m{i}") for i in range(5, 9)] + [fin(9)]
+        r = self.receive(packets)
+        self.assertEqual(list(r.received), [[f"m{i}" for i in range(9)]])
 
     def test_old_packet_of_earlier_message_is_only_reacked(self):
         r = self.receive([data(0, "a"), fin(1), data(0, "a"), data(2, "b"), fin(3)])
@@ -224,6 +231,13 @@ class SenderTests(unittest.TestCase):
         run_steps(r, 1)
         self.assertTrue(r.flush())
         self.assertEqual(r.sender_metrics.calls["add_retransmission_sent"], 1)
+
+    def test_late_ack_released_after_a_newer_one_is_not_a_new_ack(self):
+        r = make_rdt([ack(0), ack(1), ack(2), ack(3), ack(4), ack(0)])
+        r.send([f"m{i}" for i in range(20)])
+        run_steps(r, 8)
+        # window is [5, 8]: none of them was ACKed
+        self.assertEqual({seq: entry[0] for seq, entry in r.send_window.items()}, {5: False, 6: False, 7: False, 8: False})
 
     def test_flush_gives_up_on_silent_peer(self):
         r = make_rdt([])
