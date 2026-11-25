@@ -44,9 +44,12 @@ if __name__ == '__main__':
 
     for name, server, client, server_log, client_log in runs:
         client.wait()
-        # the server only stops after a long idle timeout; the client is done, so stop it now
-        server.terminate()
-        server.wait()
+        # the server stops by itself when the client disconnects
+        try:
+            server.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            server.terminate()
+            server.wait()
         server_log.close()
         client_log.close()
         print(f"Finished {name} (client exit code {client.returncode})")

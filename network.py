@@ -26,6 +26,7 @@ class NetworkLayer:
     lock = threading.Lock()
     collect_thread = None
     stop = None
+    closed = False  # the peer closed the connection
     socket_timeout = 0.1
     reorder_msg_S = None
 
@@ -87,23 +88,34 @@ class NetworkLayer:
 
         # keep calling send until all the bytes are transferred
         totalsent = 0
-        while totalsent < len(msg_S):
-            sent = self.conn.send(msg_S[totalsent:].encode('utf-8'))
-            if sent == 0:
-                raise RuntimeError("socket connection broken")
-            totalsent = totalsent + sent
+        try:
+            while totalsent < len(msg_S):
+                sent = self.conn.send(msg_S[totalsent:].encode('utf-8'))
+                if sent == 0:
+                    raise RuntimeError("socket connection broken")
+                totalsent = totalsent + sent
+        except ConnectionError:
+            # the peer is gone, so the packet is lost; the collector thread
+            # sees the same error and sets `closed`
+            pass
 
     ## Receive data from the network and save in internal buffer
     def collect(self):
         while (True):
             try:
                 recv_bytes = self.conn.recv(2048)
+                if not recv_bytes:
+                    self.closed = True
+                    return
                 with self.lock:
                     self.buffer_S += recv_bytes.decode('utf-8')
             except BlockingIOError as err:
                 pass
             except socket.timeout as err:
                 pass
+            except ConnectionError:
+                self.closed = True
+                return
             if self.stop:
                 return
 

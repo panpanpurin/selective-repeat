@@ -1,7 +1,13 @@
+import contextlib
+import io
+import os
+import socket
+import struct
 import time
 import unittest
 
 import rdt
+from network import NetworkLayer
 from rdt import RDT, Packet
 
 rdt.debug = False
@@ -9,6 +15,8 @@ rdt.debug = False
 
 class FakeNetwork:
     """Hands queued raw packets to the receiver one per read, records what is sent."""
+    closed = False
+
     def __init__(self, incoming):
         self.incoming = list(incoming)
         self.sent = []
@@ -22,6 +30,8 @@ class FakeNetwork:
 
 class FakePeer:
     """A receiver that ACKs every data packet; can drop the FIN's ACK and reply once it gets the FIN."""
+    closed = False
+
     def __init__(self, ack_fin=True, reply=None):
         self.ack_fin = ack_fin
         self.reply = reply or []
@@ -169,6 +179,68 @@ class SenderTests(unittest.TestCase):
         r.fin_max_retries = 3
         r.rdt_4_0_send(["a"], NullMetrics())
         self.assertEqual(kinds(peer.sent).count(("F", 1)), 4)   # first send + 3 resends
+
+
+class CloseTests(unittest.TestCase):
+
+    def test_receive_stops_when_peer_closes(self):
+        r = make_rdt([])
+        r.connection_timeout = 5
+        r.network.closed = True
+        start = time.time()
+        self.assertEqual(r.rdt_4_0_receive(NullMetrics()), [])
+        self.assertLess(time.time() - start, 0.5)
+
+    def test_data_that_arrived_before_the_close_is_delivered(self):
+        r = make_rdt([data(0, "a"), data(1, "b"), fin(2)])
+        r.network.closed = True
+        self.assertEqual(r.rdt_4_0_receive(NullMetrics()), ["a", "b"])
+
+    def test_send_stops_when_peer_closes(self):
+        r = make_rdt([])   # nothing is ever ACKed
+        r.network.closed = True
+        start = time.time()
+        r.rdt_4_0_send(["a", "b"], NullMetrics())
+        self.assertLess(time.time() - start, 0.5)
+
+
+class NetworkTests(unittest.TestCase):
+
+    def setUp(self):
+        self.listener = socket.socket()
+        self.listener.bind(("localhost", 0))
+        self.listener.listen(1)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.net = NetworkLayer("client", "localhost", self.listener.getsockname()[1], 0, 0, 0)
+        self.peer, _ = self.listener.accept()
+
+    def tearDown(self):
+        self.net.disconnect()
+        self.net.conn.close()
+        self.peer.close()
+        self.listener.close()
+
+    def wait_closed(self):
+        limit = time.time() + 2
+        while not self.net.closed and time.time() < limit:
+            time.sleep(0.01)
+        return self.net.closed
+
+    def test_peer_close_is_detected_after_its_last_data(self):
+        self.peer.sendall(b"last")
+        self.peer.close()
+        self.assertTrue(self.wait_closed())
+        self.assertEqual(self.net.udt_receive(), "last")
+        self.net.collect_thread.join(1)
+        self.assertFalse(self.net.collect_thread.is_alive())
+
+    def test_abrupt_close_is_detected_and_sending_does_not_raise(self):
+        # linger 0: close sends a reset instead of a normal close
+        self.peer.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("hh" if os.name == "nt" else "ii", 1, 0))
+        self.peer.close()
+        self.assertTrue(self.wait_closed())
+        for _ in range(3):
+            self.net.udt_send(data(0, "a"))
 
 
 if __name__ == "__main__":

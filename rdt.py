@@ -175,6 +175,9 @@ class RDT:
     # if the receiver gets no packets for this many seconds, it stops waiting
     connection_timeout = 5
 
+    # pause (s) when there is nothing to do, so waiting doesn't use 100% CPU
+    idle_sleep = 0.001
+
     # FIN resends without an ACK before the sender assumes the receiver is done and gone
     fin_max_retries = 5
 
@@ -208,6 +211,10 @@ class RDT:
 
     def disconnect(self):
         self.network.disconnect()
+
+    # whether the peer closed the connection
+    def closed(self):
+        return self.network.closed
 
     # read from the network and extract every complete packet in the buffer
     # returns (whether anything was read, list of raw packets)
@@ -321,7 +328,20 @@ class RDT:
             if done:
                 break
 
-            _, packets = self.read_packets(metrics)
+            # check before reading, so data that arrived before the close is still processed
+            closed = self.closed()
+            got_data, packets = self.read_packets(metrics)
+
+            if not got_data:
+                if closed:
+                    debug_log("##################################################")
+                    debug_log(f"Connection closed by the peer: Stopped sending at {format_time(time.time_ns())}")
+                    debug_log("##################################################\n")
+                    break
+
+                # nothing to read, and nothing to send until an ACK or a timeout
+                if len(queue) == 0 or len(window) >= self.window_len:
+                    time.sleep(self.idle_sleep)
 
             for i, received in enumerate(packets):
 
@@ -421,9 +441,18 @@ class RDT:
             if self.pending:
                 packets, self.pending = self.pending, []
             else:
+                # check before reading, so data that arrived before the close is still processed
+                closed = self.closed()
                 got_data, packets = self.read_packets(metrics)
                 if (got_data):
                     last_timer = time.time()
+                elif closed:
+                    debug_log("##################################################")
+                    debug_log(f"Connection closed by the peer: Stopped receiving at {format_time(time.time_ns())}")
+                    debug_log("##################################################\n")
+                    break
+                else:
+                    time.sleep(self.idle_sleep)
 
             for received in packets:
 

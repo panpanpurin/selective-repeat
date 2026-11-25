@@ -51,6 +51,9 @@ if __name__ == '__main__':
                 metricsServerReceiver.plot_simulation_time()
                 metricsServerSender.plot_simulation_time()
 
+            elif (rdt.closed()):
+                break
+
     except (KeyboardInterrupt, SystemExit):
         rdt.disconnect()
         print("Ending connection...")

@@ -37,6 +37,10 @@ if __name__ == '__main__':
             transport.send(rdt, text, metricsClientSender)
             reply = transport.receive(rdt, metricsClientReceiver)
 
+            if reply is None and rdt.closed():
+                print("Client: the server closed the connection")
+                break
+
             print("||||||||||||||||||||||||||||||||||||||||||||||||||")
             print(f'Client: Original Sentence: \n\t{text}')
             print(f'Client: Converted Sentence Received: \n\t{reply}')
