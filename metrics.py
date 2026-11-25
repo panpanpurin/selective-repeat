@@ -1,8 +1,5 @@
 import os
 import time
-import matplotlib
-matplotlib.use("Agg")  # plots are saved to files, no window needed
-import matplotlib.pyplot as plt
 from rdt import Packet, format_time
 
 HEADER_LEN = Packet.size_len + Packet.seq_num_len + Packet.checksum_len + 1
@@ -89,6 +86,11 @@ class Metrics:
 
     # x = seconds since start, y = running total of `weights`
     def _plot_cumulative(self, path, title, ylabel, times, weights=None, isOrange=0):
+        # imported here so matplotlib is only needed to make plots
+        import matplotlib
+        matplotlib.use("Agg")  # plots are saved to files, no window needed
+        import matplotlib.pyplot as plt
+
         plt.figure(figsize=(12, 6))
         plt.title(title)
         plt.xlabel("Time (s)")

@@ -4,6 +4,8 @@ import os
 import random
 import socket
 import struct
+import subprocess
+import sys
 import threading
 import time
 import unittest
@@ -366,7 +368,6 @@ class NetworkTests(unittest.TestCase):
 
     def tearDown(self):
         self.net.disconnect()
-        self.net.conn.close()
         self.peer.close()
         self.listener.close()
 
@@ -375,6 +376,44 @@ class NetworkTests(unittest.TestCase):
         while not self.net.closed and time.time() < limit:
             time.sleep(0.01)
         return self.net.closed
+
+    def read(self, length):
+        out = ""
+        limit = time.time() + 2
+        while len(out) < length and time.time() < limit:
+            out += self.net.udt_receive()
+            time.sleep(0.01)
+        return out
+
+    def test_character_split_across_two_reads(self):
+        raw = "é".encode("utf-8")
+        self.peer.sendall(raw[:1])
+        time.sleep(0.2)
+        self.peer.sendall(raw[1:])
+        self.assertEqual(self.read(1), "é")
+
+    def test_invalid_bytes_do_not_stop_the_collector(self):
+        self.peer.sendall(b"\xff")
+        time.sleep(0.2)
+        self.peer.sendall(b"ok")
+        self.assertTrue(self.read(3).endswith("ok"))
+
+    def test_partial_sends_keep_every_byte(self):
+        class OneByteSocket:
+            sent = b""
+            def send(self, raw):
+                self.sent += raw[:1]
+                return 1
+        conn, self.net.conn = self.net.conn, OneByteSocket()
+        msg = data(0, "ação")
+        self.net.udt_send(msg)
+        fake, self.net.conn = self.net.conn, conn
+        self.assertEqual(fake.sent.decode("utf-8"), msg)
+
+    def test_disconnect_closes_the_connection(self):
+        self.net.disconnect()
+        self.peer.settimeout(1)
+        self.assertEqual(self.peer.recv(10), b"")
 
     def test_peer_close_is_detected_after_its_last_data(self):
         self.peer.sendall(b"last")
@@ -391,6 +430,14 @@ class NetworkTests(unittest.TestCase):
         self.assertTrue(self.wait_closed())
         for _ in range(3):
             self.net.udt_send(data(0, "a"))
+
+
+class MetricsTests(unittest.TestCase):
+
+    def test_matplotlib_is_only_needed_for_plots(self):
+        here = os.path.dirname(os.path.abspath(__file__))
+        code = "import sys, metrics; sys.exit('matplotlib' in sys.modules)"
+        self.assertEqual(subprocess.run([sys.executable, "-c", code], cwd=here).returncode, 0)
 
 
 if __name__ == "__main__":

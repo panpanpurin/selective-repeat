@@ -12,6 +12,10 @@ if __name__ == '__main__':
     add_error_args(parser)
     args = parser.parse_args()
 
+    # if matplotlib is missing, stop now instead of after the whole run
+    if args.plots:
+        import matplotlib
+
     quotes = [
         'The art of debugging is figuring out what you really told your program to do rather than what you thought you told it to do. -- Andrew Singer', 
     	'The good news about computers is that they do what you tell them to do. The bad news is that they do what you tell them to do. -- Ted Nelson', 
@@ -71,5 +75,3 @@ if __name__ == '__main__':
     finally:
         rdt.disconnect()
         print("Connection ended.")
-
-    del rdt

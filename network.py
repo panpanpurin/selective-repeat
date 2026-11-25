@@ -1,4 +1,5 @@
 import argparse
+import codecs
 import socket
 import threading
 from time import sleep
@@ -22,8 +23,6 @@ class NetworkLayer:
 
     sock = None
     conn = None
-    buffer_S = ''
-    lock = threading.Lock()
     collect_thread = None
     stop = None
     closed = False  # the peer closed the connection
@@ -34,6 +33,10 @@ class NetworkLayer:
         if loss is not None: self.prob_pkt_loss = loss
         if corrupt is not None: self.prob_byte_corr = corrupt
         if reorder is not None: self.prob_pkt_reorder = reorder
+        # data read by the collector thread and not delivered yet
+        self.buffer_S = ''
+        self.lock = threading.Lock()
+
         print(f'Network: loss={self.prob_pkt_loss} corruption={self.prob_byte_corr} reorder={self.prob_pkt_reorder}')
 
         if role_S == 'client':
@@ -59,8 +62,6 @@ class NetworkLayer:
         if self.collect_thread:
             self.stop = True
             self.collect_thread.join()
-
-    def __del__(self):
         if self.sock is not None: self.sock.close()
         if self.conn is not None: self.conn.close()
 
@@ -87,10 +88,11 @@ class NetworkLayer:
                 self.reorder_msg_S = None
 
         # keep calling send until all the bytes are transferred
+        msg_bytes = msg_S.encode('utf-8')
         totalsent = 0
         try:
-            while totalsent < len(msg_S):
-                sent = self.conn.send(msg_S[totalsent:].encode('utf-8'))
+            while totalsent < len(msg_bytes):
+                sent = self.conn.send(msg_bytes[totalsent:])
                 if sent == 0:
                     raise RuntimeError("socket connection broken")
                 totalsent = totalsent + sent
@@ -101,6 +103,9 @@ class NetworkLayer:
 
     ## Receive data from the network and save in internal buffer
     def collect(self):
+        # keeps the start of a character whose bytes were split across two reads
+        decoder = codecs.getincrementaldecoder('utf-8')(errors='replace')
+
         while (True):
             try:
                 recv_bytes = self.conn.recv(2048)
@@ -108,7 +113,7 @@ class NetworkLayer:
                     self.closed = True
                     return
                 with self.lock:
-                    self.buffer_S += recv_bytes.decode('utf-8')
+                    self.buffer_S += decoder.decode(recv_bytes)
             except BlockingIOError as err:
                 pass
             except socket.timeout as err:

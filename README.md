@@ -41,7 +41,7 @@ With `--plots <dir>`, the client also saves plots of these metrics over time as 
 
 The code is designed to allow the transmission of multiple messages between the client and server. The number of messages can be configured as a command-line argument for the client (`-n`, default 5).
 
-Install the dependencies:
+Install the dependencies (matplotlib, only needed for `--plots` and `scenarios.py`):
 
 ```bash
 pip install -r requirements.txt

@@ -56,5 +56,3 @@ if __name__ == '__main__':
     finally:
         rdt.disconnect()
         print("Connection ended.")
-
-    del rdt
