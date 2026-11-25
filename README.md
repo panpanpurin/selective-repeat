@@ -72,4 +72,12 @@ python scenarios.py -n 5
 ```
 
 The scenarios use ports 5000 to 5004 (change the first one with `--port`), and a run takes about 1 to 2 minutes.
+
+### Tests
+
+The unit tests run the protocol against a fake network, so they need no server:
+
+```bash
+python -m unittest
+```
 ---
