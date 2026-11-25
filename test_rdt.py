@@ -204,6 +204,16 @@ class CloseTests(unittest.TestCase):
         self.assertLess(time.time() - start, 0.5)
 
 
+class FormatTimeTests(unittest.TestCase):
+
+    def test_microseconds_are_zero_padded(self):
+        self.assertTrue(rdt.format_time(1700000000 * 10**9 + 42000).endswith(".000042"))
+
+    def test_uses_local_time(self):
+        expected = time.strftime("%d-%m-%Y %H:%M:%S", time.localtime(1700000000))
+        self.assertEqual(rdt.format_time(1700000000 * 10**9), expected + ".000000")
+
+
 class NetworkTests(unittest.TestCase):
 
     def setUp(self):

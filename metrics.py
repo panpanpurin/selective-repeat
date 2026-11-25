@@ -3,13 +3,7 @@ import time
 import matplotlib
 matplotlib.use("Agg")  # plots are saved to files, no window needed
 import matplotlib.pyplot as plt
-from rdt import Packet
-
-def format_time(val):
-    f_time = time.strftime("%d-%m-%Y %H:%M:%S", time.gmtime(val/1000000000 - 3*60*60))
-    us = (val//1000) % 1000000
-    f_time += f".{us:3d} us"
-    return f_time
+from rdt import Packet, format_time
 
 HEADER_LEN = Packet.size_len + Packet.seq_num_len + Packet.checksum_len + 1
 
